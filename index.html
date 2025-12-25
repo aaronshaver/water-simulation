@@ -277,6 +277,13 @@
 
       const PRESSURE_ATTEMPT_LIMIT = 10;
 
+      // Simple "water finds its level" relaxation
+      const LEVELING = Object.freeze({
+        passesPerTick: 2,
+        minDifferenceToMove: 2
+      });
+      let levelingScanLeftToRight = true;
+
       const elArea = document.getElementById("gridArea");
       const elViz  = document.getElementById("vizGrid");
       const elLog  = document.getElementById("logOutput");
@@ -875,6 +882,119 @@
         dropletLog(droplet.id, "entered overflow state");
       }
 
+      // -------- Leveling Phase (horizontal relaxation) --------
+
+      function buildCellBuckets() {
+        const buckets = Array.from({ length: cols * rows }, () => []);
+        for (let dropletIndex = 0; dropletIndex < droplets.length; dropletIndex++) {
+          const droplet = droplets[dropletIndex];
+          if (!inBounds(droplet.x, droplet.y)) continue;
+          buckets[idxOf(droplet.x, droplet.y)].push(dropletIndex);
+        }
+        return buckets;
+      }
+
+      function moveOneDropletBetweenCells({
+        fromCellIndex,
+        toCellIndex,
+        toX,
+        toY,
+        buckets
+      }) {
+        const fromBucket = buckets[fromCellIndex];
+        if (fromBucket.length === 0) return false;
+
+        const pickPos = (Math.random() * fromBucket.length) | 0;
+        const pickedDropletIndex = fromBucket[pickPos];
+
+        // swap-pop from source
+        fromBucket[pickPos] = fromBucket[fromBucket.length - 1];
+        fromBucket.pop();
+
+        const droplet = droplets[pickedDropletIndex];
+
+        // update counts first (so pressure is consistent within the pass)
+        fill[fromCellIndex] -= 1;
+        fill[toCellIndex] += 1;
+
+        // move droplet object
+        droplet.x = toX;
+        droplet.y = toY;
+
+        // moving wakes the droplet up
+        droplet.momentumDirection = 0;
+        droplet.restingType = "none";
+        droplet.overflowed = false;
+        droplet.pressureAttempts = 0;
+
+        // add to destination bucket
+        buckets[toCellIndex].push(pickedDropletIndex);
+
+        return droplet;
+      }
+
+      function relaxHorizontallyOnePass({ maxFill, buckets }) {
+        let movedAny = false;
+
+        for (let y = 0; y < rows; y++) {
+          const startX = levelingScanLeftToRight ? 0 : cols - 2;
+          const endX   = levelingScanLeftToRight ? cols - 1 : -1;
+          const step   = levelingScanLeftToRight ? 1 : -1;
+
+          for (let x = startX; x !== endX; x += step) {
+            const leftCellIndex = idxOf(x, y);
+            const rightCellIndex = idxOf(x + 1, y);
+
+            if (solids[leftCellIndex] === 1 || solids[rightCellIndex] === 1) continue;
+
+            const leftFillCount = fill[leftCellIndex];
+            const rightFillCount = fill[rightCellIndex];
+
+            const diff = leftFillCount - rightFillCount;
+
+            if (diff >= LEVELING.minDifferenceToMove && rightFillCount < maxFill) {
+              const movedDroplet = moveOneDropletBetweenCells({
+                fromCellIndex: leftCellIndex,
+                toCellIndex: rightCellIndex,
+                toX: x + 1,
+                toY: y,
+                buckets
+              });
+              if (movedDroplet) {
+                dropletLog(movedDroplet.id, "leveling: moving right");
+                movedAny = true;
+              }
+            } else if (diff <= -LEVELING.minDifferenceToMove && leftFillCount < maxFill) {
+              const movedDroplet = moveOneDropletBetweenCells({
+                fromCellIndex: rightCellIndex,
+                toCellIndex: leftCellIndex,
+                toX: x,
+                toY: y,
+                buckets
+              });
+              if (movedDroplet) {
+                dropletLog(movedDroplet.id, "leveling: moving left");
+                movedAny = true;
+              }
+            }
+          }
+        }
+
+        levelingScanLeftToRight = !levelingScanLeftToRight;
+        return movedAny;
+      }
+
+      function levelingPhase(maxFill) {
+        const buckets = buildCellBuckets();
+
+        for (let pass = 0; pass < LEVELING.passesPerTick; pass++) {
+          const moved = relaxHorizontallyOnePass({ maxFill, buckets });
+          if (!moved) break;
+        }
+      }
+
+      // -------- End Leveling Phase --------
+
       function tick() {
         if (!playing) return;
 
@@ -950,6 +1070,9 @@
             continue;
           }
         }
+
+        // Horizontal leveling to reduce "towers"
+        levelingPhase(maxFill);
 
         renderAll();
         flushLogs();
