@@ -24,7 +24,6 @@
       overflow: hidden; /* never scroll */
     }
 
-    /* Real grid: each cell is a real DOM element; borders are real */
     .viz-grid {
       display: grid;
       border: 1px solid var(--bs-border-color);
@@ -39,6 +38,7 @@
     }
 
     .viz-cell {
+      position: relative;
       width: var(--cell-size);
       height: var(--cell-size);
       border-radius: 0;
@@ -47,12 +47,30 @@
       border-right: 1px solid var(--cell-border);
       border-bottom: 1px solid var(--cell-border);
     }
-
     .viz-cell.last-col { border-right: none; }
     .viz-cell.last-row { border-bottom: none; }
 
-    /* Primitive: water droplet (solid light blue square) */
-    .viz-cell.has-droplet { background: #0dcaf0; }
+    /* Water: slightly darker blue (solid) */
+    .viz-cell.has-water { background: #0aa2c0; }
+
+    /* Solid: slightly darker brown (solid) */
+    .viz-cell.is-solid { background: #6f4a22; }
+
+    /* Tiny white count bottom-right (non-solid only) */
+    .cell-count {
+      position: absolute;
+      right: 2px;
+      bottom: 1px;
+      font-size: 10px;
+      line-height: 1;
+      color: #ffffff;
+      pointer-events: none;
+      user-select: none;
+      -webkit-user-select: none;
+      font-variant-numeric: tabular-nums;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    }
+    .viz-cell.is-solid .cell-count { display: none; }
 
     .mono {
       font-variant-numeric: tabular-nums;
@@ -79,10 +97,8 @@
       min-width: 4.75rem; /* stable between Play / Paused */
     }
 
-    /* Wrapper used to receive hover events while inner controls are disabled */
-    .disabled-wrap {
-      display: inline-block;
-    }
+    .disabled-wrap { display: inline-block; }
+    .disabled-wrap.locked > * { pointer-events: none; } /* wrapper gets hover for tooltip */
   </style>
 </head>
 
@@ -95,16 +111,14 @@
 
         <div class="d-flex flex-wrap align-items-center gap-2 ms-auto">
 
-          <!-- Native Bootstrap switch (default OFF => Paused) -->
           <div class="form-check form-switch play-switch">
             <input id="playSwitch" class="form-check-input" type="checkbox" role="switch">
             <label id="playSwitchLabel" class="form-check-label" for="playSwitch">Paused</label>
           </div>
 
-          <!-- Grid controls (disabled while playing; tooltip on hover when disabled) -->
           <span id="gridControlsWrap" class="disabled-wrap"
                 data-bs-toggle="tooltip" data-bs-placement="bottom"
-                data-bs-title="Pause simulation to change this control">
+                data-bs-title="Pause simulation to change">
             <div class="input-group input-group-sm w-auto">
               <span class="input-group-text">Grid Size</span>
               <input id="gridCols" type="number" class="form-control mono" value="10" min="2" max="30"
@@ -115,10 +129,9 @@
             </div>
           </span>
 
-          <!-- Max fill (disabled while playing; tooltip on hover when disabled) -->
           <span id="maxFillWrap" class="disabled-wrap"
                 data-bs-toggle="tooltip" data-bs-placement="bottom"
-                data-bs-title="Pause simulation to change this control">
+                data-bs-title="Pause simulation to change">
             <div class="input-group input-group-sm w-auto">
               <span class="input-group-text">Max Fill</span>
               <input id="maxFill" type="number" class="form-control mono" value="7" min="1" max="10"
@@ -133,7 +146,7 @@
 
           <div class="input-group input-group-sm w-auto">
             <span class="input-group-text">Ticks/s</span>
-            <input id="ticksPerSecond" type="number" class="form-control mono" value="3"
+            <input id="ticksPerSecond" type="number" class="form-control mono" value="5"
                    min="1" max="30" step="1" inputmode="numeric" aria-label="Simulation speed"
                    style="max-width: 6.25rem;">
           </div>
@@ -159,8 +172,8 @@
         cols: 10,
         rows: 10,
         maxFill: 7,
-        ticksPerSecond: 3,
-        playing: false // start paused
+        ticksPerSecond: 5,
+        playing: false
       });
 
       const LIMITS = Object.freeze({
@@ -191,16 +204,22 @@
       let cols = DEFAULTS.cols;
       let rows = DEFAULTS.rows;
 
-      // Droplet occupancy: 1 = droplet present, 0 = empty.
-      let droplets = new Uint8Array(cols * rows);
+      // Solids: 1 = solid block
+      let solids = new Uint8Array(cols * rows);
 
-      // Cache of cell elements (first-class citizens)
-      let cellEls = [];
+      // Agents: each droplet is an agent {x,y,dir}
+      // dir: -1 left momentum, +1 right momentum, 0 none
+      let agents = [];
+
+      // Per-cell fill counts (kept in sync)
+      let fill = new Uint8Array(cols * rows);
+
+      // Per-cell buckets (indices into agents) for squeeze selection
+      let cellBuckets = Array.from({ length: cols * rows }, () => []);
 
       let playing = DEFAULTS.playing;
       let timerId = null;
 
-      // Tooltips (enabled only while playing)
       const ttGrid = new bootstrap.Tooltip(gridControlsWrap, { trigger: "hover focus" });
       const ttFill = new bootstrap.Tooltip(maxFillWrap, { trigger: "hover focus" });
 
@@ -211,14 +230,20 @@
         return Math.max(lo, Math.min(hi, v));
       }
 
+      function getMaxFill() {
+        return clampInt(elMaxFill.value, LIMITS.maxFillMin, LIMITS.maxFillMax);
+      }
+
       function getTicksPerSecond() {
         return clampInt(elTPS.value, LIMITS.tpsMin, LIMITS.tpsMax);
       }
 
+      function idxOf(x, y) {
+        return y * cols + x;
+      }
+
       function updateTotal() {
-        let n = 0;
-        for (let i = 0; i < droplets.length; i++) n += droplets[i];
-        elTotal.textContent = String(n);
+        elTotal.textContent = String(agents.length);
       }
 
       function updateCellSize() {
@@ -230,11 +255,9 @@
         const availW = Math.max(0, areaRect.width - padX);
         const availH = Math.max(0, areaRect.height - padY);
 
-        const outerBorder = 2; // 1px each side
-
+        const outerBorder = 2;
         let cell = Math.floor(Math.min((availW - outerBorder) / cols, (availH - outerBorder) / rows));
         if (!Number.isFinite(cell) || cell <= 0) cell = 2;
-
         cell = Math.max(2, Math.min(200, cell));
 
         elViz.style.setProperty("--cell-size", cell + "px");
@@ -242,80 +265,168 @@
         elViz.style.height = (cell * rows + outerBorder) + "px";
       }
 
-      function renderAllDroplets() {
-        for (let i = 0; i < droplets.length; i++) {
-          cellEls[i].classList.toggle("has-droplet", droplets[i] === 1);
+      function clearBuckets() {
+        for (let i = 0; i < cellBuckets.length; i++) cellBuckets[i].length = 0;
+      }
+
+      function rebuildFillAndBuckets() {
+        fill.fill(0);
+        clearBuckets();
+        for (let ai = 0; ai < agents.length; ai++) {
+          const a = agents[ai];
+          const i = idxOf(a.x, a.y);
+          fill[i] += 1;
+          cellBuckets[i].push(ai);
+        }
+      }
+
+      function renderAll() {
+        const cells = elViz.children;
+        for (let i = 0; i < cells.length; i++) {
+          const cell = cells[i];
+          const isSolid = solids[i] === 1;
+          const w = isSolid ? 0 : fill[i];
+
+          cell.classList.toggle("is-solid", isSolid);
+          cell.classList.toggle("has-water", !isSolid && w > 0);
+
+          const countEl = cell.firstChild;
+          if (!isSolid) countEl.textContent = String(w);
+          else countEl.textContent = "";
         }
         updateTotal();
       }
 
-      function buildGrid(preserveDroplets) {
+      function removeAgentAt(index) {
+        const last = agents.length - 1;
+        if (index < 0 || index > last) return;
+        if (index !== last) agents[index] = agents[last];
+        agents.pop();
+      }
+
+      function removeAgentsInSolidCells() {
+        for (let ai = agents.length - 1; ai >= 0; ai--) {
+          const a = agents[ai];
+          const i = idxOf(a.x, a.y);
+          if (solids[i] === 1) removeAgentAt(ai);
+        }
+      }
+
+      function clampAgentsToMaxFill(maxFill) {
+        // Ensure no cell exceeds maxFill by removing excess agents (from the back).
+        fill.fill(0);
+        for (let ai = 0; ai < agents.length; ai++) {
+          const a = agents[ai];
+          const i = idxOf(a.x, a.y);
+          fill[i] += 1;
+        }
+
+        for (let ai = agents.length - 1; ai >= 0; ai--) {
+          const a = agents[ai];
+          const i = idxOf(a.x, a.y);
+          if (solids[i] === 1) {
+            removeAgentAt(ai);
+            continue;
+          }
+          if (fill[i] > maxFill) {
+            fill[i] -= 1;
+            removeAgentAt(ai);
+          }
+        }
+      }
+
+      function scatterSolids() {
+        solids = new Uint8Array(cols * rows);
+
+        const target = Math.floor((cols * rows) / 10);
+        if (target <= 0) return;
+
+        let placed = 0;
+        let guard = 0;
+        const maxAttempts = target * 30;
+
+        while (placed < target && guard < maxAttempts) {
+          guard++;
+          const i = (Math.random() * (cols * rows)) | 0;
+          if (solids[i] === 1) continue;
+          solids[i] = 1;
+          placed++;
+        }
+      }
+
+      function buildGrid(preserveAgents) {
         const newCols = clampInt(elCols.value, LIMITS.gridMin, LIMITS.gridMax);
         const newRows = clampInt(elRows.value, LIMITS.gridMin, LIMITS.gridMax);
 
         elCols.value = newCols;
         elRows.value = newRows;
 
-        let nextDroplets = new Uint8Array(newCols * newRows);
-
-        if (preserveDroplets) {
-          const copyCols = Math.min(cols, newCols);
-          const copyRows = Math.min(rows, newRows);
-          for (let y = 0; y < copyRows; y++) {
-            for (let x = 0; x < copyCols; x++) {
-              nextDroplets[y * newCols + x] = droplets[y * cols + x];
-            }
+        if (!preserveAgents) {
+          agents = [];
+        } else {
+          // Drop agents outside new bounds
+          for (let ai = agents.length - 1; ai >= 0; ai--) {
+            const a = agents[ai];
+            if (a.x >= newCols || a.y >= newRows) removeAgentAt(ai);
           }
         }
 
         cols = newCols;
         rows = newRows;
-        droplets = nextDroplets;
+
+        // Recreate per-grid arrays
+        solids = new Uint8Array(cols * rows);
+        fill = new Uint8Array(cols * rows);
+        cellBuckets = Array.from({ length: cols * rows }, () => []);
 
         elViz.style.gridTemplateColumns = `repeat(${cols}, var(--cell-size))`;
         elViz.style.gridTemplateRows = `repeat(${rows}, var(--cell-size))`;
 
         elViz.replaceChildren();
-        cellEls = new Array(cols * rows);
 
         const frag = document.createDocumentFragment();
         for (let y = 0; y < rows; y++) {
           for (let x = 0; x < cols; x++) {
+            const i = y * cols + x;
+
             const cell = document.createElement("div");
             cell.className = "viz-cell";
             cell.dataset.x = String(x);
             cell.dataset.y = String(y);
-            cell.dataset.index = String(y * cols + x);
+            cell.dataset.index = String(i);
 
             if (x === cols - 1) cell.classList.add("last-col");
             if (y === rows - 1) cell.classList.add("last-row");
 
-            cellEls[y * cols + x] = cell;
+            const count = document.createElement("span");
+            count.className = "cell-count";
+            count.textContent = "0";
+            cell.appendChild(count);
+
             frag.appendChild(cell);
           }
         }
         elViz.appendChild(frag);
 
+        scatterSolids();
+        removeAgentsInSolidCells();
+        clampAgentsToMaxFill(getMaxFill());
+
+        rebuildFillAndBuckets();
         updateCellSize();
-        renderAllDroplets();
+        renderAll();
       }
 
       function setControlsLocked(isLocked) {
-        // disable inputs
         elCols.disabled = isLocked;
         elRows.disabled = isLocked;
         elMaxFill.disabled = isLocked;
 
-        // enable tooltips only when locked (i.e., playing)
-        if (isLocked) {
-          ttGrid.enable();
-          ttFill.enable();
-        } else {
-          ttGrid.hide();
-          ttFill.hide();
-          ttGrid.disable();
-          ttFill.disable();
-        }
+        gridControlsWrap.classList.toggle("locked", isLocked);
+        maxFillWrap.classList.toggle("locked", isLocked);
+
+        if (isLocked) { ttGrid.enable(); ttFill.enable(); }
+        else { ttGrid.hide(); ttFill.hide(); ttGrid.disable(); ttFill.disable(); }
       }
 
       function setPlaying(next) {
@@ -343,41 +454,193 @@
         timerId = setInterval(tick, intervalMs);
       }
 
-      // Rule: droplet falls down one cell per tick if empty below.
-      // If in bottom row, it exits simulation => removed.
+      function attemptSqueezeMove(ai, maxFill) {
+        const a = agents[ai];
+        const x = a.x;
+        const y = a.y;
+        const i = idxOf(x, y);
+
+        // Precondition checks (caller should already ensure these)
+        const leftIdx = (x > 0) ? (i - 1) : -1;
+        const rightIdx = (x < cols - 1) ? (i + 1) : -1;
+
+        const canLeft = leftIdx !== -1 && solids[leftIdx] === 0 && fill[leftIdx] < maxFill;
+        const canRight = rightIdx !== -1 && solids[rightIdx] === 0 && fill[rightIdx] < maxFill;
+
+        if (!canLeft && !canRight) return false;
+
+        const preferLeft = Math.random() < 0.5;
+        const first = preferLeft ? -1 : +1;
+        const second = -first;
+
+        function tryDir(dir) {
+          if (dir === -1) {
+            if (!canLeft) return false;
+            // move agent left
+            fill[i] -= 1;
+            fill[leftIdx] += 1;
+            a.x -= 1;
+            a.dir = 0; // done squeezing
+            return true;
+          } else {
+            if (!canRight) return false;
+            fill[i] -= 1;
+            fill[rightIdx] += 1;
+            a.x += 1;
+            a.dir = 0;
+            return true;
+          }
+        }
+
+        if (tryDir(first)) return true;
+        return tryDir(second);
+      }
+
+      function attemptSideMoveWithMomentum(ai, maxFill) {
+        const a = agents[ai];
+        const x = a.x;
+        const y = a.y;
+        const i = idxOf(x, y);
+
+        if (a.dir === 0) a.dir = (Math.random() < 0.5) ? -1 : +1;
+
+        const dir = a.dir;
+        const nx = x + dir;
+
+        // Treat boundary as blocked like a wall; switch direction and try once
+        if (nx < 0 || nx >= cols) {
+          const odir = -dir;
+          const onx = x + odir;
+          if (onx < 0 || onx >= cols) { a.dir = 0; return; }
+          const oi = i + odir;
+          if (solids[oi] === 1) { a.dir = 0; return; }
+          if (fill[oi] >= maxFill) { /* blocked by water; keep momentum */ return; }
+
+          fill[i] -= 1;
+          fill[oi] += 1;
+          a.x = onx;
+          a.dir = odir;
+          return;
+        }
+
+        const ti = i + dir;
+
+        // If target is solid, try other side; if other works, momentum becomes other direction; else momentum ceases
+        if (solids[ti] === 1) {
+          const odir = -dir;
+          const onx = x + odir;
+          if (onx < 0 || onx >= cols) { a.dir = 0; return; }
+          const oi = i + odir;
+
+          if (solids[oi] === 1) { a.dir = 0; return; }
+          if (fill[oi] >= maxFill) { a.dir = 0; return; }
+
+          fill[i] -= 1;
+          fill[oi] += 1;
+          a.x = onx;
+          a.dir = odir;
+          return;
+        }
+
+        // Not solid; only move if there is capacity; if full water, do nothing and keep momentum
+        if (fill[ti] >= maxFill) return;
+
+        fill[i] -= 1;
+        fill[ti] += 1;
+        a.x = nx;
+        // momentum remains in same direction
+      }
+
       function tick() {
         if (!playing) return;
 
-        if (rows > 0) {
-          const bottomStart = (rows - 1) * cols;
-          for (let x = 0; x < cols; x++) {
-            const i = bottomStart + x;
-            if (droplets[i] === 1) {
-              droplets[i] = 0;
-              cellEls[i].classList.remove("has-droplet");
-            }
-          }
+        const maxFill = getMaxFill();
+
+        // Agents in bottom row fall out at the start of the tick (so bottom row can be displayed for a full tick)
+        for (let ai = agents.length - 1; ai >= 0; ai--) {
+          if (agents[ai].y === rows - 1) removeAgentAt(ai);
         }
 
-        for (let y = rows - 2; y >= 0; y--) {
-          const rowStart = y * cols;
-          const belowStart = (y + 1) * cols;
-          for (let x = 0; x < cols; x++) {
-            const i = rowStart + x;
-            if (droplets[i] !== 1) continue;
+        removeAgentsInSolidCells();
 
-            const b = belowStart + x;
-            if (droplets[b] === 0) {
-              droplets[i] = 0;
-              droplets[b] = 1;
+        rebuildFillAndBuckets();
 
-              cellEls[i].classList.remove("has-droplet");
-              cellEls[b].classList.add("has-droplet");
-            }
-          }
+        // Pressure squeeze selection (one droplet per qualifying max-filled cell)
+        const selectedToSqueeze = [];
+        for (let i = 0; i < fill.length; i++) {
+          if (solids[i] === 1) continue;
+          if (fill[i] !== maxFill) continue;
+
+          const y = Math.floor(i / cols);
+          const x = i - y * cols;
+          if (y === 0) continue;
+
+          const above = i - cols;
+          if (fill[above] < 1) continue;
+
+          const left = (x > 0) ? (i - 1) : -1;
+          const right = (x < cols - 1) ? (i + 1) : -1;
+
+          const canLeft = left !== -1 && solids[left] === 0 && fill[left] < maxFill;
+          const canRight = right !== -1 && solids[right] === 0 && fill[right] < maxFill;
+
+          if (!canLeft && !canRight) continue;
+
+          const bucket = cellBuckets[i];
+          if (!bucket || bucket.length === 0) continue;
+
+          const pick = bucket[(Math.random() * bucket.length) | 0];
+          selectedToSqueeze.push(pick);
         }
 
-        updateTotal();
+        // Execute squeezes first so above droplets can drop into newly freed space this tick
+        for (let k = 0; k < selectedToSqueeze.length; k++) {
+          const ai = selectedToSqueeze[k];
+          if (ai < 0 || ai >= agents.length) continue; // safety
+          // Agent might have moved due to earlier squeeze from another cell? (rare) Re-validate by using current pos.
+          const a = agents[ai];
+          const i = idxOf(a.x, a.y);
+          if (solids[i] === 1) continue;
+          if (fill[i] < maxFill) continue; // no longer max-filled
+          attemptSqueezeMove(ai, maxFill);
+        }
+
+        // Now run each droplet agent's simple program once
+        for (let ai = 0; ai < agents.length; ai++) {
+          const a = agents[ai];
+          const x = a.x;
+          const y = a.y;
+
+          // If at bottom row, it stays until next tick removes it
+          if (y === rows - 1) continue;
+
+          const i = idxOf(x, y);
+          if (solids[i] === 1) continue; // should not happen, but safe
+
+          const below = i + cols;
+
+          // On top of solid => come to rest
+          if (solids[below] === 1) {
+            a.dir = 0;
+            continue;
+          }
+
+          // Try to go down if there's capacity
+          if (fill[below] < maxFill) {
+            fill[i] -= 1;
+            fill[below] += 1;
+            a.y += 1;
+            a.dir = 0;
+            continue;
+          }
+
+          // Below is max-filled water => sliding state with momentum
+          attemptSideMoveWithMomentum(ai, maxFill);
+        }
+
+        // Fill array is kept in sync by moves, but buckets are stale now; rebuild just for rendering counts
+        // (Rendering uses fill only; no need for buckets here.)
+        renderAll();
       }
 
       function resetAll() {
@@ -386,9 +649,14 @@
         elMaxFill.value = DEFAULTS.maxFill;
         elTPS.value = DEFAULTS.ticksPerSecond;
 
+        agents = [];
+
         cols = DEFAULTS.cols;
         rows = DEFAULTS.rows;
-        droplets = new Uint8Array(cols * rows);
+
+        solids = new Uint8Array(cols * rows);
+        fill = new Uint8Array(cols * rows);
+        cellBuckets = Array.from({ length: cols * rows }, () => []);
 
         buildGrid(false);
         setPlaying(DEFAULTS.playing);
@@ -402,19 +670,27 @@
         };
       }
 
-      // Click to add droplet if absent
+      // Click to add 1 droplet agent if not solid and below max fill
       elViz.addEventListener("pointerdown", (e) => {
         const cell = e.target.closest?.(".viz-cell");
         if (!cell) return;
 
-        const i = Number(cell.dataset.index);
-        if (!Number.isFinite(i) || i < 0 || i >= droplets.length) return;
+        const x = Number(cell.dataset.x);
+        const y = Number(cell.dataset.y);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) return;
 
-        if (droplets[i] === 0) {
-          droplets[i] = 1;
-          cell.classList.add("has-droplet");
-          updateTotal();
-        }
+        const i = idxOf(x, y);
+        if (solids[i] === 1) return;
+
+        const maxFill = getMaxFill();
+
+        // Ensure fill is current (it should be, but keep consistent if clicked while paused)
+        // fill is maintained by moves and updated on add/remove; safe to rely on it.
+        if (fill[i] >= maxFill) return;
+
+        agents.push({ x, y, dir: 0 });
+        fill[i] += 1;
+        renderAll();
       });
 
       // Inputs
@@ -423,6 +699,9 @@
 
       elMaxFill.addEventListener("change", () => {
         elMaxFill.value = clampInt(elMaxFill.value, LIMITS.maxFillMin, LIMITS.maxFillMax);
+        clampAgentsToMaxFill(getMaxFill());
+        rebuildFillAndBuckets();
+        renderAll();
       });
 
       // Whole integers only, 1..30
@@ -435,15 +714,9 @@
         if (playing) startTimer();
       });
 
-      // Switch play/pause
-      playSwitch.addEventListener("change", () => {
-        setPlaying(playSwitch.checked);
-      });
-
-      // Reset
+      playSwitch.addEventListener("change", () => setPlaying(playSwitch.checked));
       btnReset.addEventListener("click", resetAll);
 
-      // Resize
       const ro = new ResizeObserver(() => updateCellSize());
       ro.observe(elArea);
       window.addEventListener("resize", debounce(updateCellSize, 80), { passive: true });
