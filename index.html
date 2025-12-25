@@ -84,7 +84,7 @@
     .viz-cell.water-4 { background: #06687c; }
     .viz-cell.water-5 { background: #055566; }
 
-    /* Solid: slightly darker brown */
+    /* Solid: darker brown */
     .viz-cell.is-solid { background: #6f4a22; }
 
     /* Tiny white count bottom-right (non-solid only) */
@@ -270,6 +270,11 @@
         tpsMax: 30
       });
 
+      const PRESSURE = Object.freeze({
+        neighborWeight: 0.20,
+        tieThreshold: 0.03
+      });
+
       const elArea = document.getElementById("gridArea");
       const elViz  = document.getElementById("vizGrid");
       const elLog  = document.getElementById("logOutput");
@@ -293,19 +298,16 @@
       // Solids: 1 = solid block
       let solids = new Uint8Array(cols * rows);
 
-      // Overflow markers per cell
-      let overMark = new Uint8Array(cols * rows);
-
-      // Agents: {id,x,y,dir,bottomSeen,resting,overflowed}
-      // dir: -1 left momentum, +1 right momentum, 0 none
-      let agents = [];
-      let nextDropletId = 0;
-
-      // Per-cell fill counts (kept in sync as agents move)
+      // Per-cell fill counts
       let fill = new Uint16Array(cols * rows);
 
-      // Buckets for pressure selection (rebuilt per tick)
-      let cellBuckets = Array.from({ length: cols * rows }, () => []);
+      // Overflow markers per cell (derived from droplets each render)
+      let overMark = new Uint8Array(cols * rows);
+
+      // Droplets: {id, x, y, momentumDirection, bottomSeen, resting, overflowed}
+      // momentumDirection: -1 (left), 0 (none), +1 (right)
+      let droplets = [];
+      let nextDropletId = 0;
 
       let playing = DEFAULTS.playing;
       let timerId = null;
@@ -321,8 +323,8 @@
         elLog.textContent = logLines.join("\n");
         elLog.scrollTop = elLog.scrollHeight;
       }
-      function dropletLog(id, msg) {
-        logMsg(`droplet ${id}: ${msg}`);
+      function dropletLog(dropletId, msg) {
+        logMsg(`droplet ${dropletId}: ${msg}`);
       }
       function clearLog() {
         logLines.length = 0;
@@ -334,11 +336,11 @@
       const ttGrid = new bootstrap.Tooltip(gridControlsWrap, { trigger: "hover focus" });
       const ttFill = new bootstrap.Tooltip(maxFillWrap, { trigger: "hover focus" });
 
-      function clampInt(v, lo, hi) {
-        v = Number(v);
-        if (!Number.isFinite(v)) return lo;
-        v = Math.trunc(v);
-        return Math.max(lo, Math.min(hi, v));
+      function clampInt(value, lo, hi) {
+        value = Number(value);
+        if (!Number.isFinite(value)) return lo;
+        value = Math.trunc(value);
+        return Math.max(lo, Math.min(hi, value));
       }
 
       function getMaxFill() {
@@ -353,8 +355,12 @@
         return y * cols + x;
       }
 
+      function inBounds(x, y) {
+        return x >= 0 && x < cols && y >= 0 && y < rows;
+      }
+
       function updateTotal() {
-        elTotal.textContent = String(agents.length);
+        elTotal.textContent = String(droplets.length);
       }
 
       function updateCellSize() {
@@ -376,128 +382,184 @@
         elViz.style.height = (cell * rows + outerBorder) + "px";
       }
 
-      function clearBuckets() {
-        for (let i = 0; i < cellBuckets.length; i++) cellBuckets[i].length = 0;
-      }
-
-      function rebuildFillAndBuckets() {
+      function rebuildFill() {
         fill.fill(0);
-        clearBuckets();
-        for (let ai = 0; ai < agents.length; ai++) {
-          const a = agents[ai];
-          const i = idxOf(a.x, a.y);
-          fill[i] += 1;
-          cellBuckets[i].push(ai);
+        for (let dropletIndex = 0; dropletIndex < droplets.length; dropletIndex++) {
+          const droplet = droplets[dropletIndex];
+          if (!inBounds(droplet.x, droplet.y)) continue;
+          fill[idxOf(droplet.x, droplet.y)] += 1;
         }
       }
 
-      function renderAll() {
-        const cells = elViz.children;
+      function rebuildOverflowMarkers() {
+        overMark.fill(0);
+        for (let dropletIndex = 0; dropletIndex < droplets.length; dropletIndex++) {
+          const droplet = droplets[dropletIndex];
+          if (!droplet.overflowed) continue;
+          if (!inBounds(droplet.x, droplet.y)) continue;
+          overMark[idxOf(droplet.x, droplet.y)] = 1;
+        }
+      }
 
-        for (let i = 0; i < cells.length; i++) {
-          const cell = cells[i];
-          const isSolid = solids[i] === 1;
-          const w = isSolid ? 0 : fill[i];
+      // Pressure model: base fill plus neighbor influence.
+      // IMPORTANT: out-of-bounds and solid neighbors contribute the SAME AS the candidate cell's base.
+      // This prevents edge bias.
+      function computePressureAtCell(x, y, maxFill) {
+        if (!inBounds(x, y)) return Infinity;
 
-          cell.classList.toggle("is-solid", isSolid);
+        const cellIndex = idxOf(x, y);
+        if (solids[cellIndex] === 1) return Infinity;
 
-          cell.classList.remove("water-1","water-2","water-3","water-4","water-5");
-          if (!isSolid && w > 0) {
-            const shade = Math.min(5, w);
-            cell.classList.add(`water-${shade}`);
+        const base = fill[cellIndex] / maxFill;
+
+        const neighborOffsets = [
+          [0, -1],  // up
+          [0,  1],  // down
+          [-1, 0],  // left
+          [ 1, 0]   // right
+        ];
+
+        let neighborSum = 0;
+
+        for (let i = 0; i < neighborOffsets.length; i++) {
+          const neighborX = x + neighborOffsets[i][0];
+          const neighborY = y + neighborOffsets[i][1];
+
+          if (!inBounds(neighborX, neighborY)) {
+            neighborSum += base;
+            continue;
           }
 
-          const countEl = cell.children[0];
-          const overEl  = cell.children[1];
+          const neighborIndex = idxOf(neighborX, neighborY);
+          if (solids[neighborIndex] === 1) {
+            neighborSum += base;
+            continue;
+          }
+
+          neighborSum += (fill[neighborIndex] / maxFill);
+        }
+
+        const neighborAvg = neighborSum / 4;
+        return base + (PRESSURE.neighborWeight * neighborAvg);
+      }
+
+      function renderAll() {
+        rebuildOverflowMarkers();
+
+        const cells = elViz.children;
+        for (let cellIndex = 0; cellIndex < cells.length; cellIndex++) {
+          const cellElement = cells[cellIndex];
+          const isSolid = solids[cellIndex] === 1;
+          const waterCount = isSolid ? 0 : fill[cellIndex];
+
+          cellElement.classList.toggle("is-solid", isSolid);
+
+          cellElement.classList.remove("water-1","water-2","water-3","water-4","water-5");
+          if (!isSolid && waterCount > 0) {
+            const shade = Math.min(5, waterCount);
+            cellElement.classList.add(`water-${shade}`);
+          }
+
+          const countElement = cellElement.children[0];
+          const overflowElement = cellElement.children[1];
 
           if (!isSolid) {
-            countEl.textContent = String(w);
-            overEl.textContent = (overMark[i] === 1) ? "O" : "";
+            countElement.textContent = String(waterCount);
+            overflowElement.textContent = (overMark[cellIndex] === 1) ? "O" : "";
           } else {
-            countEl.textContent = "";
-            overEl.textContent = "";
+            countElement.textContent = "";
+            overflowElement.textContent = "";
           }
         }
 
         updateTotal();
       }
 
-      function removeAgentAt(index) {
-        const last = agents.length - 1;
+      function removeDropletAt(index) {
+        const last = droplets.length - 1;
         if (index < 0 || index > last) return;
-        if (index !== last) agents[index] = agents[last];
-        agents.pop();
+        if (index !== last) droplets[index] = droplets[last];
+        droplets.pop();
       }
 
-      function removeAgentsInSolidCells() {
-        for (let ai = agents.length - 1; ai >= 0; ai--) {
-          const a = agents[ai];
-          const i = idxOf(a.x, a.y);
-          if (solids[i] === 1) {
-            dropletLog(a.id, "is inside a solid block; removed");
-            removeAgentAt(ai);
-          }
-        }
-      }
-
-      function clampAgentsToMaxFill(maxFill) {
-        fill.fill(0);
-        for (let ai = 0; ai < agents.length; ai++) {
-          const a = agents[ai];
-          const i = idxOf(a.x, a.y);
-          fill[i] += 1;
-        }
-
-        for (let ai = agents.length - 1; ai >= 0; ai--) {
-          const a = agents[ai];
-          const i = idxOf(a.x, a.y);
-          if (solids[i] === 1) {
-            dropletLog(a.id, "is inside a solid block; removed");
-            removeAgentAt(ai);
+      function removeDropletsInSolidCells() {
+        for (let dropletIndex = droplets.length - 1; dropletIndex >= 0; dropletIndex--) {
+          const droplet = droplets[dropletIndex];
+          if (!inBounds(droplet.x, droplet.y)) {
+            removeDropletAt(dropletIndex);
             continue;
           }
-          if (fill[i] > maxFill) {
-            dropletLog(a.id, "was removed due to max fill clamp");
-            fill[i] -= 1;
-            removeAgentAt(ai);
+          const cellIndex = idxOf(droplet.x, droplet.y);
+          if (solids[cellIndex] === 1) {
+            dropletLog(droplet.id, "is inside a solid block; removed");
+            removeDropletAt(dropletIndex);
           }
         }
       }
 
+      function clampDropletsToMaxFill(maxFill) {
+        rebuildFill();
+
+        for (let dropletIndex = droplets.length - 1; dropletIndex >= 0; dropletIndex--) {
+          const droplet = droplets[dropletIndex];
+          if (!inBounds(droplet.x, droplet.y)) {
+            removeDropletAt(dropletIndex);
+            continue;
+          }
+
+          const cellIndex = idxOf(droplet.x, droplet.y);
+
+          if (solids[cellIndex] === 1) {
+            dropletLog(droplet.id, "is inside a solid block; removed");
+            removeDropletAt(dropletIndex);
+            continue;
+          }
+
+          if (fill[cellIndex] > maxFill) {
+            dropletLog(droplet.id, "was removed due to max fill clamp");
+            fill[cellIndex] -= 1;
+            removeDropletAt(dropletIndex);
+          }
+        }
+
+        rebuildFill();
+      }
+
+      // Solid density: 20%
       function scatterSolids() {
         solids = new Uint8Array(cols * rows);
 
-        const target = Math.floor((cols * rows) / 10);
+        const target = Math.floor((cols * rows) / 5); // 20%
         if (target <= 0) return;
 
         let placed = 0;
-        let guard = 0;
+        let attempts = 0;
         const maxAttempts = target * 30;
 
-        while (placed < target && guard < maxAttempts) {
-          guard++;
-          const i = (Math.random() * (cols * rows)) | 0;
-          if (solids[i] === 1) continue;
-          solids[i] = 1;
+        while (placed < target && attempts < maxAttempts) {
+          attempts++;
+          const cellIndex = (Math.random() * (cols * rows)) | 0;
+          if (solids[cellIndex] === 1) continue;
+          solids[cellIndex] = 1;
           placed++;
         }
       }
 
-      function buildGrid(preserveAgents) {
+      function buildGrid(preserveDroplets) {
         const newCols = clampInt(elCols.value, LIMITS.gridMin, LIMITS.gridMax);
         const newRows = clampInt(elRows.value, LIMITS.gridMin, LIMITS.gridMax);
 
         elCols.value = newCols;
         elRows.value = newRows;
 
-        if (!preserveAgents) {
-          agents = [];
+        if (!preserveDroplets) {
+          droplets = [];
         } else {
-          for (let ai = agents.length - 1; ai >= 0; ai--) {
-            const a = agents[ai];
-            if (a.x >= newCols || a.y >= newRows) {
-              dropletLog(a.id, "fell outside resized grid; removed");
-              removeAgentAt(ai);
+          for (let dropletIndex = droplets.length - 1; dropletIndex >= 0; dropletIndex--) {
+            const droplet = droplets[dropletIndex];
+            if (droplet.x >= newCols || droplet.y >= newRows) {
+              dropletLog(droplet.id, "fell outside resized grid; removed");
+              removeDropletAt(dropletIndex);
             }
           }
         }
@@ -506,23 +568,21 @@
         rows = newRows;
 
         solids = new Uint8Array(cols * rows);
-        overMark = new Uint8Array(cols * rows);
         fill = new Uint16Array(cols * rows);
-        cellBuckets = Array.from({ length: cols * rows }, () => []);
+        overMark = new Uint8Array(cols * rows);
 
         elViz.style.gridTemplateColumns = `repeat(${cols}, var(--cell-size))`;
         elViz.style.gridTemplateRows = `repeat(${rows}, var(--cell-size))`;
 
         elViz.replaceChildren();
 
-        const frag = document.createDocumentFragment();
+        const fragment = document.createDocumentFragment();
         for (let y = 0; y < rows; y++) {
           for (let x = 0; x < cols; x++) {
             const cell = document.createElement("div");
             cell.className = "viz-cell";
             cell.dataset.x = String(x);
             cell.dataset.y = String(y);
-            cell.dataset.index = String(y * cols + x);
 
             if (x === cols - 1) cell.classList.add("last-col");
             if (y === rows - 1) cell.classList.add("last-row");
@@ -531,23 +591,23 @@
             count.className = "cell-count";
             count.textContent = "0";
 
-            const over = document.createElement("span");
-            over.className = "cell-over";
-            over.textContent = "";
+            const overflow = document.createElement("span");
+            overflow.className = "cell-over";
+            overflow.textContent = "";
 
             cell.appendChild(count);
-            cell.appendChild(over);
+            cell.appendChild(overflow);
 
-            frag.appendChild(cell);
+            fragment.appendChild(cell);
           }
         }
-        elViz.appendChild(frag);
+        elViz.appendChild(fragment);
 
         scatterSolids();
-        removeAgentsInSolidCells();
-        clampAgentsToMaxFill(getMaxFill());
+        removeDropletsInSolidCells();
+        clampDropletsToMaxFill(getMaxFill());
 
-        rebuildFillAndBuckets();
+        rebuildFill();
         updateCellSize();
         renderAll();
         flushLogs();
@@ -584,311 +644,260 @@
 
       function startTimer() {
         stopTimer();
-        const tps = getTicksPerSecond();
-        const intervalMs = Math.max(1, Math.floor(1000 / tps));
+        const ticksPerSecond = getTicksPerSecond();
+        const intervalMs = Math.max(1, Math.floor(1000 / ticksPerSecond));
         timerId = setInterval(tick, intervalMs);
       }
 
-      function attemptSqueezeSide(ai, maxFill, reasonLabel) {
-        const a = agents[ai];
-        const x = a.x;
-        const y = a.y;
-        const i = idxOf(x, y);
+      function tryFallOne(dropletIndex, maxFill) {
+        const droplet = droplets[dropletIndex];
+        if (droplet.y >= rows - 1) return false;
 
-        const leftIdx = (x > 0) ? (i - 1) : -1;
-        const rightIdx = (x < cols - 1) ? (i + 1) : -1;
+        const currentIndex = idxOf(droplet.x, droplet.y);
+        const belowIndex = idxOf(droplet.x, droplet.y + 1);
 
-        const canLeft = leftIdx !== -1 && solids[leftIdx] === 0 && fill[leftIdx] < maxFill;
-        const canRight = rightIdx !== -1 && solids[rightIdx] === 0 && fill[rightIdx] < maxFill;
+        if (solids[belowIndex] === 1) return false;
+        if (fill[belowIndex] >= maxFill) return false;
 
-        dropletLog(a.id, `${reasonLabel}: trying to squeeze to side`);
+        dropletLog(droplet.id, "dropping down");
 
-        if (!canLeft && !canRight) {
-          dropletLog(a.id, `${reasonLabel}: left and right are blocked (solid or max-filled)`);
-          return false;
-        }
+        fill[currentIndex] -= 1;
+        fill[belowIndex] += 1;
 
-        const preferLeft = Math.random() < 0.5;
-        dropletLog(a.id, `${reasonLabel}: coin toss => ${preferLeft ? "left" : "right"}`);
+        droplet.y += 1;
+        droplet.momentumDirection = 0;
+        droplet.resting = false;
+        droplet.overflowed = false;
 
-        const order = preferLeft ? [-1, +1] : [+1, -1];
-        for (let k = 0; k < 2; k++) {
-          const dir = order[k];
-          if (dir === -1) {
-            if (!canLeft) {
-              dropletLog(a.id, `${reasonLabel}: cannot go left`);
-              continue;
-            }
-            dropletLog(a.id, `${reasonLabel}: moving left`);
-            fill[i] -= 1;
-            fill[leftIdx] += 1;
-            a.x -= 1;
-            a.dir = 0;
-            a.resting = false;
-            a.overflowed = false;
-            return true;
-          } else {
-            if (!canRight) {
-              dropletLog(a.id, `${reasonLabel}: cannot go right`);
-              continue;
-            }
-            dropletLog(a.id, `${reasonLabel}: moving right`);
-            fill[i] -= 1;
-            fill[rightIdx] += 1;
-            a.x += 1;
-            a.dir = 0;
-            a.resting = false;
-            a.overflowed = false;
-            return true;
-          }
-        }
-
-        dropletLog(a.id, `${reasonLabel}: squeeze attempt failed`);
-        return false;
-      }
-
-      function attemptSqueezeUp(ai, maxFill) {
-        const a = agents[ai];
-        const x = a.x;
-        const y = a.y;
-        const i = idxOf(x, y);
-
-        dropletLog(a.id, "pressure squeeze upward: trying upper-left / upper / upper-right");
-
-        if (y === 0) {
-          dropletLog(a.id, "pressure squeeze upward: at top edge; cannot go up");
-          return false;
-        }
-
-        const options = [-1, 0, +1];
-        while (options.length > 0) {
-          const pickIdx = (Math.random() * options.length) | 0;
-          const dx = options[pickIdx];
-          options.splice(pickIdx, 1);
-
-          const nx = x + dx;
-          const ny = y - 1;
-
-          const label = (dx === -1) ? "upper-left" : (dx === 0) ? "upper" : "upper-right";
-          dropletLog(a.id, `pressure squeeze upward: trying ${label}`);
-
-          if (nx < 0 || nx >= cols) {
-            dropletLog(a.id, `pressure squeeze upward: ${label} is out of bounds`);
-            continue;
-          }
-
-          const ni = idxOf(nx, ny);
-
-          if (solids[ni] === 1) {
-            dropletLog(a.id, `pressure squeeze upward: ${label} is a solid block`);
-            continue;
-          }
-
-          if (fill[ni] >= maxFill) {
-            dropletLog(a.id, `pressure squeeze upward: ${label} is max-filled`);
-            continue;
-          }
-
-          dropletLog(a.id, `pressure squeeze upward: moving to ${label}`);
-          fill[i] -= 1;
-          fill[ni] += 1;
-          a.x = nx;
-          a.y = ny;
-          a.dir = 0;
-          a.bottomSeen = false;
-          a.resting = false;
-          a.overflowed = false;
-          return true;
-        }
-
-        dropletLog(a.id, "oh no, all three upper cells i cannot move to. giving up.");
-        return false;
-      }
-
-      function selectModuloAgentIndex(bucket, maxFill) {
-        if (!bucket || bucket.length === 0) return -1;
-        const r = (Math.random() * maxFill) | 0;
-
-        const candidates = [];
-        for (let local = 0; local < bucket.length; local++) {
-          if ((local % maxFill) === r) candidates.push(bucket[local]);
-        }
-
-        if (candidates.length === 0) return bucket[r % bucket.length];
-        return candidates[(Math.random() * candidates.length) | 0];
-      }
-
-      function overflowKickAtCell(x, y, maxFill, spawnedIdForThought) {
-        const i = idxOf(x, y);
-
-        if (spawnedIdForThought !== null) {
-          dropletLog(spawnedIdForThought, "oh, i'm in a max fill cell that has more than the max droplets");
-        }
-
-        const bucket = [];
-        for (let ai = 0; ai < agents.length; ai++) {
-          const a = agents[ai];
-          if (a.x === x && a.y === y) bucket.push(ai);
-        }
-        if (bucket.length === 0) return;
-
-        const chosen = selectModuloAgentIndex(bucket, maxFill);
-        if (chosen < 0 || chosen >= agents.length) return;
-
-        const chosenAgent = agents[chosen];
-        dropletLog(chosenAgent.id, "selected to squeeze to the side (overflow logic)");
-
-        const movedSide = attemptSqueezeSide(chosen, maxFill, "overflow");
-        if (movedSide) return;
-
-        dropletLog(chosenAgent.id, "unable to squeeze to the sides; trying to squeeze upward");
-        const movedUp = attemptSqueezeUp(chosen, maxFill);
-        if (movedUp) return;
-
-        overMark[i] = 1;
-        chosenAgent.overflowed = true;
-        dropletLog(chosenAgent.id, "entered overflow state");
-      }
-
-      function tryFallOne(ai, maxFill) {
-        const a = agents[ai];
-        if (a.y === rows - 1) return false;
-
-        const i = idxOf(a.x, a.y);
-        const below = i + cols;
-
-        if (solids[below] === 1) return false;
-        if (fill[below] >= maxFill) return false;
-
-        dropletLog(a.id, "dropping down");
-        fill[i] -= 1;
-        fill[below] += 1;
-        a.y += 1;
-        a.dir = 0;
-        a.resting = false;
-        a.overflowed = false;
-        if (a.y === rows - 1) a.bottomSeen = true;
+        if (droplet.y === rows - 1) droplet.bottomSeen = true;
         return true;
       }
 
-      function escapeFromMaxBelow(ai, maxFill) {
-        const a = agents[ai];
-        const x = a.x;
-        const y = a.y;
-        const i = idxOf(x, y);
+      // Side choice rule:
+      // - Prefer the side with LOWER fill count (always).
+      // - If fill counts are equal, choose lower pressure.
+      // - If still tied, coin toss.
+      function attemptSideMoveByPressure(dropletIndex, maxFill) {
+        const droplet = droplets[dropletIndex];
+        const currentX = droplet.x;
+        const currentY = droplet.y;
 
-        // If already overflowed, do nothing
-        if (a.overflowed) return;
+        const currentIndex = idxOf(currentX, currentY);
 
-        // Side attempts: coin flip, track tried
-        const dirs = [-1, +1];
-        const triedSides = new Set();
+        const hasLeftNeighbor = currentX > 0;
+        const hasRightNeighbor = currentX < cols - 1;
 
-        // If we have momentum, try it first, otherwise random
-        let firstDir;
-        if (a.dir === -1 || a.dir === +1) {
-          firstDir = a.dir;
-        } else {
-          firstDir = (Math.random() < 0.5) ? -1 : +1;
-        }
+        const leftX = currentX - 1;
+        const rightX = currentX + 1;
 
-        function canEnterSide(dir) {
-          const nx = x + dir;
-          if (nx < 0 || nx >= cols) return false;
-          const ni = i + dir;
-          if (solids[ni] === 1) return false;
-          if (fill[ni] >= maxFill) return false;
+        const leftIndex = hasLeftNeighbor ? idxOf(leftX, currentY) : -1;
+        const rightIndex = hasRightNeighbor ? idxOf(rightX, currentY) : -1;
+
+        const leftIsCandidate =
+          leftIndex !== -1 &&
+          solids[leftIndex] === 0 &&
+          fill[leftIndex] < maxFill;
+
+        const rightIsCandidate =
+          rightIndex !== -1 &&
+          solids[rightIndex] === 0 &&
+          fill[rightIndex] < maxFill;
+
+        if (!leftIsCandidate && !rightIsCandidate) return false;
+
+        // Only one side is available
+        if (leftIsCandidate && !rightIsCandidate) {
+          fill[currentIndex] -= 1;
+          fill[leftIndex] += 1;
+          droplet.x = leftX;
+          droplet.momentumDirection = -1;
+          droplet.resting = false;
+          droplet.overflowed = false;
+          dropletLog(droplet.id, "sliding left");
           return true;
         }
 
-        function doEnterSide(dir) {
-          const ni = i + dir;
-          dropletLog(a.id, `sliding ${dir === -1 ? "left" : "right"}`);
-          fill[i] -= 1;
-          fill[ni] += 1;
-          a.x += dir;
-          a.dir = dir;         // momentum only if we successfully moved
-          a.resting = false;
-          a.overflowed = false;
+        if (rightIsCandidate && !leftIsCandidate) {
+          fill[currentIndex] -= 1;
+          fill[rightIndex] += 1;
+          droplet.x = rightX;
+          droplet.momentumDirection = +1;
+          droplet.resting = false;
+          droplet.overflowed = false;
+          dropletLog(droplet.id, "sliding right");
+          return true;
         }
 
-        function attemptSideOnce(dir) {
-          triedSides.add(dir);
-          if (canEnterSide(dir)) {
-            doEnterSide(dir);
-            // sub-tick: after a successful slide, allow a single fall attempt immediately
-            tryFallOne(ai, maxFill);
-            return true;
+        // Both available: decide with (fill first) then (pressure)
+        const leftFillCount = fill[leftIndex];
+        const rightFillCount = fill[rightIndex];
+
+        let chosenDirection = 0;
+
+        if (leftFillCount !== rightFillCount) {
+          chosenDirection = (leftFillCount < rightFillCount) ? -1 : +1;
+          dropletLog(droplet.id, `seeking lower pressure => ${chosenDirection === -1 ? "left" : "right"}`);
+        } else {
+          const leftPressure = computePressureAtCell(leftX, currentY, maxFill);
+          const rightPressure = computePressureAtCell(rightX, currentY, maxFill);
+          const difference = leftPressure - rightPressure;
+
+          if (Math.abs(difference) <= PRESSURE.tieThreshold) {
+            chosenDirection = (Math.random() < 0.5) ? -1 : +1;
+            dropletLog(droplet.id, `coin toss => ${chosenDirection === -1 ? "left" : "right"}`);
+          } else {
+            chosenDirection = (leftPressure < rightPressure) ? -1 : +1;
+            dropletLog(droplet.id, `seeking lower pressure => ${chosenDirection === -1 ? "left" : "right"}`);
           }
+        }
+
+        if (chosenDirection === -1) {
+          fill[currentIndex] -= 1;
+          fill[leftIndex] += 1;
+          droplet.x = leftX;
+          droplet.momentumDirection = -1;
+          droplet.resting = false;
+          droplet.overflowed = false;
+          dropletLog(droplet.id, "sliding left");
+          return true;
+        }
+
+        fill[currentIndex] -= 1;
+        fill[rightIndex] += 1;
+        droplet.x = rightX;
+        droplet.momentumDirection = +1;
+        droplet.resting = false;
+        droplet.overflowed = false;
+        dropletLog(droplet.id, "sliding right");
+        return true;
+      }
+
+      // After side attempts fail, try one of the three upper cells (upper-left, upper, upper-right),
+      // preferring LOWER fill first, then LOWER pressure, then coin toss.
+      function attemptUpwardTryThree(dropletIndex, maxFill) {
+        const droplet = droplets[dropletIndex];
+        const currentX = droplet.x;
+        const currentY = droplet.y;
+
+        if (currentY === 0) return false;
+
+        const attemptOptions = [
+          { label: "upper-left",  dx: -1 },
+          { label: "upper",       dx:  0 },
+          { label: "upper-right", dx: +1 }
+        ];
+
+        // Randomize attempt order for logging/agent flavor, but selection is by (fill, pressure)
+        const attemptOrder = [];
+        while (attemptOptions.length > 0) {
+          const pick = (Math.random() * attemptOptions.length) | 0;
+          attemptOrder.push(attemptOptions[pick]);
+          attemptOptions.splice(pick, 1);
+        }
+
+        const upperY = currentY - 1;
+        const candidates = [];
+
+        for (let i = 0; i < attemptOrder.length; i++) {
+          const opt = attemptOrder[i];
+          const targetX = currentX + opt.dx;
+          const targetY = upperY;
+
+          dropletLog(droplet.id, `trying ${opt.label}`);
+
+          if (!inBounds(targetX, targetY)) {
+            dropletLog(droplet.id, `${opt.label} is out of bounds`);
+            continue;
+          }
+
+          const targetIndex = idxOf(targetX, targetY);
+
+          if (solids[targetIndex] === 1) {
+            dropletLog(droplet.id, `${opt.label} is a solid block`);
+            continue;
+          }
+
+          if (fill[targetIndex] >= maxFill) {
+            dropletLog(droplet.id, `${opt.label} is max-filled`);
+            continue;
+          }
+
+          candidates.push({
+            label: opt.label,
+            targetX,
+            targetY,
+            targetIndex,
+            fillCount: fill[targetIndex],
+            pressure: computePressureAtCell(targetX, targetY, maxFill)
+          });
+        }
+
+        if (candidates.length === 0) {
+          dropletLog(droplet.id, "oh no, all three upper cells i cannot move to. giving up.");
           return false;
         }
 
-        // attempt 1
-        if (attemptSideOnce(firstDir)) return;
+        // Choose best by: lowest fillCount, then lowest pressure, then coin toss.
+        let best = candidates[0];
+        for (let i = 1; i < candidates.length; i++) {
+          const c = candidates[i];
 
-        // attempt 2: "another coin flip", but only among remaining direction(s)
-        const remaining = dirs.filter(d => !triedSides.has(d));
-        if (remaining.length > 0) {
-          const secondDir = remaining[(Math.random() * remaining.length) | 0];
-          if (attemptSideOnce(secondDir)) return;
-        }
+          if (c.fillCount < best.fillCount) {
+            best = c;
+            continue;
+          }
+          if (c.fillCount > best.fillCount) continue;
 
-        // sides failed: try upward (UL, U, UR) in randomized order, tracking tried
-        if (y === 0) {
-          overMark[i] = 1;
-          a.overflowed = true;
-          a.dir = 0;
-          dropletLog(a.id, "entered overflow state");
-          return;
-        }
-
-        const ups = [-1, 0, +1];
-        const triedUp = new Set();
-
-        function canEnterUp(dx) {
-          const nx = x + dx;
-          const ny = y - 1;
-          if (nx < 0 || nx >= cols) return false;
-          const ni = idxOf(nx, ny);
-          if (solids[ni] === 1) return false;
-          if (fill[ni] >= maxFill) return false;
-          return true;
-        }
-
-        function doEnterUp(dx) {
-          const nx = x + dx;
-          const ny = y - 1;
-          const ni = idxOf(nx, ny);
-          const label = (dx === -1) ? "upper-left" : (dx === 0) ? "upper" : "upper-right";
-          dropletLog(a.id, `squeezing upward to ${label}`);
-          fill[i] -= 1;
-          fill[ni] += 1;
-          a.x = nx;
-          a.y = ny;
-          a.dir = 0;
-          a.resting = false;
-          a.overflowed = false;
-          a.bottomSeen = false;
-        }
-
-        while (triedUp.size < 3) {
-          const remainingUp = ups.filter(d => !triedUp.has(d));
-          const pick = remainingUp[(Math.random() * remainingUp.length) | 0];
-          triedUp.add(pick);
-
-          if (canEnterUp(pick)) {
-            doEnterUp(pick);
-            // optional sub-tick: allow a single fall attempt immediately
-            tryFallOne(ai, maxFill);
-            return;
+          const dp = c.pressure - best.pressure;
+          if (dp < -PRESSURE.tieThreshold) {
+            best = c;
+            continue;
+          }
+          if (Math.abs(dp) <= PRESSURE.tieThreshold) {
+            if (Math.random() < 0.5) best = c;
           }
         }
 
-        // all three upper directions failed => overflow
-        overMark[i] = 1;
-        a.overflowed = true;
-        a.dir = 0;
-        dropletLog(a.id, "entered overflow state");
+        dropletLog(droplet.id, `seeking lower pressure => ${best.label}`);
+
+        const currentIndex = idxOf(currentX, currentY);
+
+        fill[currentIndex] -= 1;
+        fill[best.targetIndex] += 1;
+
+        droplet.x = best.targetX;
+        droplet.y = best.targetY;
+        droplet.momentumDirection = 0;
+        droplet.resting = false;
+        droplet.overflowed = false;
+        droplet.bottomSeen = false;
+
+        dropletLog(droplet.id, `moving upward => ${best.label}`);
+        return true;
+      }
+
+      function handleMaxBelowPressure(dropletIndex, maxFill) {
+        // 1) prefer down (already failed to get here)
+        // 2) prefer left/right
+        const movedSide = attemptSideMoveByPressure(dropletIndex, maxFill);
+        if (movedSide) {
+          tryFallOne(dropletIndex, maxFill);
+          return;
+        }
+
+        // 3) if can't do left/right, try one of the three upper cells
+        const movedUp = attemptUpwardTryThree(dropletIndex, maxFill);
+        if (movedUp) {
+          tryFallOne(dropletIndex, maxFill);
+          return;
+        }
+
+        const droplet = droplets[dropletIndex];
+        const currentIndex = idxOf(droplet.x, droplet.y);
+        overMark[currentIndex] = 1;
+        droplet.overflowed = true;
+        droplet.momentumDirection = 0;
+        dropletLog(droplet.id, "entered overflow state");
       }
 
       function tick() {
@@ -897,95 +906,61 @@
         const maxFill = getMaxFill();
 
         // bottom-row exit (no extra chatter)
-        for (let ai = agents.length - 1; ai >= 0; ai--) {
-          const a = agents[ai];
-          if (a.y === rows - 1) {
-            if (a.bottomSeen) {
-              dropletLog(a.id, "fell out of the bottom; removed");
-              removeAgentAt(ai);
+        for (let dropletIndex = droplets.length - 1; dropletIndex >= 0; dropletIndex--) {
+          const droplet = droplets[dropletIndex];
+          if (droplet.y === rows - 1) {
+            if (droplet.bottomSeen) {
+              dropletLog(droplet.id, "fell out of the bottom; removed");
+              removeDropletAt(dropletIndex);
             } else {
-              a.bottomSeen = true;
+              droplet.bottomSeen = true;
             }
           }
         }
 
-        removeAgentsInSolidCells();
-        rebuildFillAndBuckets();
+        removeDropletsInSolidCells();
+        rebuildFill();
 
-        // Pressure squeeze: max-filled cell with water above & at least one side < max
-        const selected = [];
-        for (let i = 0; i < fill.length; i++) {
-          if (solids[i] === 1) continue;
-          if (fill[i] !== maxFill) continue;
+        for (let dropletIndex = 0; dropletIndex < droplets.length; dropletIndex++) {
+          const droplet = droplets[dropletIndex];
+          if (droplet.overflowed) continue;
+          if (droplet.y === rows - 1) continue;
 
-          const y = Math.floor(i / cols);
-          const x = i - y * cols;
-          if (y === 0) continue;
+          const currentIndex = idxOf(droplet.x, droplet.y);
+          if (solids[currentIndex] === 1) continue;
 
-          const above = i - cols;
-          if (fill[above] < 1) continue;
+          const belowY = droplet.y + 1;
+          const belowIndex = idxOf(droplet.x, belowY);
 
-          const left = (x > 0) ? (i - 1) : -1;
-          const right = (x < cols - 1) ? (i + 1) : -1;
-
-          const canLeft = left !== -1 && solids[left] === 0 && fill[left] < maxFill;
-          const canRight = right !== -1 && solids[right] === 0 && fill[right] < maxFill;
-          if (!canLeft && !canRight) continue;
-
-          const bucket = cellBuckets[i];
-          if (!bucket || bucket.length === 0) continue;
-
-          const pick = selectModuloAgentIndex(bucket, maxFill);
-          if (pick >= 0) selected.push(pick);
-        }
-
-        for (let k = 0; k < selected.length; k++) {
-          const ai = selected[k];
-          if (ai < 0 || ai >= agents.length) continue;
-          const a = agents[ai];
-          if (a.overflowed) continue;
-          dropletLog(a.id, "selected to squeeze to the side (pressure from above)");
-          attemptSqueezeSide(ai, maxFill, "pressure");
-        }
-
-        // Agent loop: decisions/changes only; resting logs once on entry
-        for (let ai = 0; ai < agents.length; ai++) {
-          const a = agents[ai];
-
-          if (a.overflowed) continue;
-          if (a.y === rows - 1) continue;
-
-          const i = idxOf(a.x, a.y);
-          if (solids[i] === 1) continue;
-
-          const below = i + cols;
-
-          // Rest on solid: log once upon entering rest
-          if (solids[below] === 1 && fill[i] <= maxFill) {
-            a.dir = 0;
-            if (!a.resting) {
-              dropletLog(a.id, "nothing to do; resting");
-              a.resting = true;
+          // Solid below: resting
+          if (solids[belowIndex] === 1 && fill[currentIndex] <= maxFill) {
+            droplet.momentumDirection = 0;
+            if (!droplet.resting) {
+              dropletLog(droplet.id, "nothing to do; resting");
+              droplet.resting = true;
             }
             continue;
           }
 
-          a.resting = false;
+          droplet.resting = false;
 
-          // Fall if possible
-          if (solids[below] === 0 && fill[below] < maxFill) {
-            dropletLog(a.id, "dropping down");
-            fill[i] -= 1;
-            fill[below] += 1;
-            a.y += 1;
-            a.dir = 0;
-            if (a.y === rows - 1) a.bottomSeen = true;
+          // 1) prefer down
+          if (solids[belowIndex] === 0 && fill[belowIndex] < maxFill) {
+            dropletLog(droplet.id, "dropping down");
+
+            fill[currentIndex] -= 1;
+            fill[belowIndex] += 1;
+
+            droplet.y = belowY;
+            droplet.momentumDirection = 0;
+
+            if (droplet.y === rows - 1) droplet.bottomSeen = true;
             continue;
           }
 
-          // Below is max-filled water => escape routine (side tries + upward tries + overflow)
-          if (solids[below] === 0 && fill[below] >= maxFill) {
-            escapeFromMaxBelow(ai, maxFill);
+          // down is blocked by max-fill water => (2) side, else (3) upper cells
+          if (solids[belowIndex] === 0 && fill[belowIndex] >= maxFill) {
+            handleMaxBelowPressure(dropletIndex, maxFill);
             continue;
           }
         }
@@ -1002,14 +977,13 @@
         elMaxFill.value = DEFAULTS.maxFill;
         elTPS.value = DEFAULTS.ticksPerSecond;
 
-        agents = [];
+        droplets = [];
         cols = DEFAULTS.cols;
         rows = DEFAULTS.rows;
 
         solids = new Uint8Array(cols * rows);
-        overMark = new Uint8Array(cols * rows);
         fill = new Uint16Array(cols * rows);
-        cellBuckets = Array.from({ length: cols * rows }, () => []);
+        overMark = new Uint8Array(cols * rows);
 
         buildGrid(false);
         setPlaying(DEFAULTS.playing);
@@ -1023,7 +997,7 @@
         };
       }
 
-      // Click to add droplet (including overflow behavior)
+      // Click to add droplet (disabled if cell is already max-filled)
       elViz.addEventListener("pointerdown", (e) => {
         const cell = e.target.closest?.(".viz-cell");
         if (!cell) return;
@@ -1031,19 +1005,26 @@
         const x = Number(cell.dataset.x);
         const y = Number(cell.dataset.y);
         if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+        if (!inBounds(x, y)) return;
 
-        const i = idxOf(x, y);
-        if (solids[i] === 1) return;
+        const cellIndex = idxOf(x, y);
+        if (solids[cellIndex] === 1) return;
 
         const maxFill = getMaxFill();
+        if (fill[cellIndex] >= maxFill) return;
 
         const newId = nextDropletId++;
-        agents.push({ id: newId, x, y, dir: 0, bottomSeen: false, resting: false, overflowed: false });
-        fill[i] += 1;
+        droplets.push({
+          id: newId,
+          x,
+          y,
+          momentumDirection: 0,
+          bottomSeen: false,
+          resting: false,
+          overflowed: false
+        });
 
-        if (fill[i] > maxFill) {
-          overflowKickAtCell(x, y, maxFill, newId);
-        }
+        fill[cellIndex] += 1;
 
         renderAll();
         flushLogs();
@@ -1055,8 +1036,7 @@
 
       elMaxFill.addEventListener("change", () => {
         elMaxFill.value = clampInt(elMaxFill.value, LIMITS.maxFillMin, LIMITS.maxFillMax);
-        clampAgentsToMaxFill(getMaxFill());
-        rebuildFillAndBuckets();
+        clampDropletsToMaxFill(getMaxFill());
         renderAll();
         flushLogs();
       });
