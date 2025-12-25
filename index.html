@@ -11,7 +11,6 @@
 
   <style>
     * { box-sizing: border-box; }
-
     html, body { height: 100%; }
     body { min-height: 100vh; }
 
@@ -25,13 +24,13 @@
       overflow: hidden; /* never scroll */
     }
 
-    /* Real grid: each cell is a real DOM element, borders are real (not painted). */
+    /* Real grid: each cell is a real DOM element; borders are real */
     .viz-grid {
       display: grid;
       border: 1px solid var(--bs-border-color);
       border-radius: 0;
       background: rgba(255,255,255,.02);
-      overflow: hidden; /* never scroll */
+      overflow: hidden;
       width: fit-content;
       height: fit-content;
 
@@ -45,7 +44,6 @@
       border-radius: 0;
       background: transparent;
 
-      /* per-cell borders => true grid lines */
       border-right: 1px solid var(--cell-border);
       border-bottom: 1px solid var(--cell-border);
     }
@@ -53,14 +51,37 @@
     .viz-cell.last-col { border-right: none; }
     .viz-cell.last-row { border-bottom: none; }
 
-    /* Primitive: water droplet (light blue square) */
-    .viz-cell.has-droplet {
-      background: rgba(13, 202, 240, 0.75);
-    }
+    /* Primitive: water droplet (solid light blue square) */
+    .viz-cell.has-droplet { background: #0dcaf0; }
 
     .mono {
       font-variant-numeric: tabular-nums;
       font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    }
+
+    .play-switch {
+      display: inline-flex;
+      align-items: center;
+      gap: .5rem;
+      user-select: none;
+      -webkit-user-select: none;
+      margin: 0;
+    }
+    .play-switch .form-check-input {
+      width: 3.1rem;
+      height: 1.65rem;
+      cursor: pointer;
+    }
+    .play-switch .form-check-label {
+      cursor: pointer;
+      font-weight: 600;
+      letter-spacing: .01em;
+      min-width: 4.75rem; /* stable between Play / Paused */
+    }
+
+    /* Wrapper used to receive hover events while inner controls are disabled */
+    .disabled-wrap {
+      display: inline-block;
     }
   </style>
 </head>
@@ -74,38 +95,50 @@
 
         <div class="d-flex flex-wrap align-items-center gap-2 ms-auto">
 
-          <div class="input-group input-group-sm w-auto">
-            <span class="input-group-text">Grid Size</span>
-            <input id="gridCols" type="number" class="form-control mono" value="10" min="2" max="200"
-                   inputmode="numeric" aria-label="Grid columns" style="max-width: 5.5rem;">
-            <span class="input-group-text px-2">×</span>
-            <input id="gridRows" type="number" class="form-control mono" value="10" min="2" max="200"
-                   inputmode="numeric" aria-label="Grid rows" style="max-width: 5.5rem;">
+          <!-- Native Bootstrap switch (default OFF => Paused) -->
+          <div class="form-check form-switch play-switch">
+            <input id="playSwitch" class="form-check-input" type="checkbox" role="switch">
+            <label id="playSwitchLabel" class="form-check-label" for="playSwitch">Paused</label>
           </div>
 
-          <div class="input-group input-group-sm w-auto">
-            <span class="input-group-text">Max Fill</span>
-            <input id="maxFill" type="number" class="form-control mono" value="7" min="1" max="50"
-                   inputmode="numeric" aria-label="Max fill" style="max-width: 5.5rem;">
-          </div>
+          <!-- Grid controls (disabled while playing; tooltip on hover when disabled) -->
+          <span id="gridControlsWrap" class="disabled-wrap"
+                data-bs-toggle="tooltip" data-bs-placement="bottom"
+                data-bs-title="Pause simulation to change this control">
+            <div class="input-group input-group-sm w-auto">
+              <span class="input-group-text">Grid Size</span>
+              <input id="gridCols" type="number" class="form-control mono" value="10" min="2" max="30"
+                     inputmode="numeric" aria-label="Grid columns" style="max-width: 5.5rem;">
+              <span class="input-group-text px-2">×</span>
+              <input id="gridRows" type="number" class="form-control mono" value="10" min="2" max="30"
+                     inputmode="numeric" aria-label="Grid rows" style="max-width: 5.5rem;">
+            </div>
+          </span>
+
+          <!-- Max fill (disabled while playing; tooltip on hover when disabled) -->
+          <span id="maxFillWrap" class="disabled-wrap"
+                data-bs-toggle="tooltip" data-bs-placement="bottom"
+                data-bs-title="Pause simulation to change this control">
+            <div class="input-group input-group-sm w-auto">
+              <span class="input-group-text">Max Fill</span>
+              <input id="maxFill" type="number" class="form-control mono" value="7" min="1" max="10"
+                     inputmode="numeric" aria-label="Max fill" style="max-width: 5.5rem;">
+            </div>
+          </span>
 
           <div class="input-group input-group-sm w-auto">
-            <span class="input-group-text">Total Water Droplets</span>
+            <span class="input-group-text">Total Water</span>
             <span id="totalWater" class="input-group-text mono fw-semibold">0</span>
           </div>
 
           <div class="input-group input-group-sm w-auto">
             <span class="input-group-text">Ticks/s</span>
-            <input id="ticksPerSecond" type="number" class="form-control mono" value="1"
-                   min="1" max="99" step="1" inputmode="numeric" aria-label="Simulation speed"
+            <input id="ticksPerSecond" type="number" class="form-control mono" value="3"
+                   min="1" max="30" step="1" inputmode="numeric" aria-label="Simulation speed"
                    style="max-width: 6.25rem;">
           </div>
 
-          <div class="btn-group btn-group-sm" role="group" aria-label="Simulation controls">
-            <button id="btnPlay" type="button" class="btn btn-success" disabled>Play</button>
-            <button id="btnPause" type="button" class="btn btn-outline-secondary">Pause</button>
-            <button id="btnReset" type="button" class="btn btn-outline-warning">Reset</button>
-          </div>
+          <button id="btnReset" type="button" class="btn btn-outline-warning btn-sm">Reset</button>
 
         </div>
       </div>
@@ -126,12 +159,24 @@
         cols: 10,
         rows: 10,
         maxFill: 7,
-        ticksPerSecond: 1,
-        playing: true
+        ticksPerSecond: 3,
+        playing: false // start paused
+      });
+
+      const LIMITS = Object.freeze({
+        gridMin: 2,
+        gridMax: 30,
+        maxFillMin: 1,
+        maxFillMax: 10,
+        tpsMin: 1,
+        tpsMax: 30
       });
 
       const elArea = document.getElementById("gridArea");
       const elViz  = document.getElementById("vizGrid");
+
+      const gridControlsWrap = document.getElementById("gridControlsWrap");
+      const maxFillWrap = document.getElementById("maxFillWrap");
 
       const elCols = document.getElementById("gridCols");
       const elRows = document.getElementById("gridRows");
@@ -139,22 +184,25 @@
       const elTPS = document.getElementById("ticksPerSecond");
       const elTotal = document.getElementById("totalWater");
 
-      const btnPlay = document.getElementById("btnPlay");
-      const btnPause = document.getElementById("btnPause");
+      const playSwitch = document.getElementById("playSwitch");
+      const playSwitchLabel = document.getElementById("playSwitchLabel");
       const btnReset = document.getElementById("btnReset");
 
       let cols = DEFAULTS.cols;
       let rows = DEFAULTS.rows;
 
       // Droplet occupancy: 1 = droplet present, 0 = empty.
-      // Using a fixed-size typed array avoids per-droplet object allocations and prevents leak-prone references.
       let droplets = new Uint8Array(cols * rows);
 
-      // Cache of cell elements (first-class UI elements for each cell).
+      // Cache of cell elements (first-class citizens)
       let cellEls = [];
 
       let playing = DEFAULTS.playing;
       let timerId = null;
+
+      // Tooltips (enabled only while playing)
+      const ttGrid = new bootstrap.Tooltip(gridControlsWrap, { trigger: "hover focus" });
+      const ttFill = new bootstrap.Tooltip(maxFillWrap, { trigger: "hover focus" });
 
       function clampInt(v, lo, hi) {
         v = Number(v);
@@ -163,10 +211,8 @@
         return Math.max(lo, Math.min(hi, v));
       }
 
-      function idx(x, y) { return y * cols + x; }
-
       function getTicksPerSecond() {
-        return clampInt(elTPS.value, 1, 99);
+        return clampInt(elTPS.value, LIMITS.tpsMin, LIMITS.tpsMax);
       }
 
       function updateTotal() {
@@ -184,14 +230,12 @@
         const availW = Math.max(0, areaRect.width - padX);
         const availH = Math.max(0, areaRect.height - padY);
 
-        // outer border is 1px on each side
-        const outerBorder = 2;
+        const outerBorder = 2; // 1px each side
 
         let cell = Math.floor(Math.min((availW - outerBorder) / cols, (availH - outerBorder) / rows));
         if (!Number.isFinite(cell) || cell <= 0) cell = 2;
 
-        // Always fit; allow very small if needed.
-        cell = Math.max(2, Math.min(160, cell));
+        cell = Math.max(2, Math.min(200, cell));
 
         elViz.style.setProperty("--cell-size", cell + "px");
         elViz.style.width = (cell * cols + outerBorder) + "px";
@@ -206,8 +250,8 @@
       }
 
       function buildGrid(preserveDroplets) {
-        const newCols = clampInt(elCols.value, 2, 200);
-        const newRows = clampInt(elRows.value, 2, 200);
+        const newCols = clampInt(elCols.value, LIMITS.gridMin, LIMITS.gridMax);
+        const newRows = clampInt(elRows.value, LIMITS.gridMin, LIMITS.gridMax);
 
         elCols.value = newCols;
         elRows.value = newRows;
@@ -256,10 +300,30 @@
         renderAllDroplets();
       }
 
+      function setControlsLocked(isLocked) {
+        // disable inputs
+        elCols.disabled = isLocked;
+        elRows.disabled = isLocked;
+        elMaxFill.disabled = isLocked;
+
+        // enable tooltips only when locked (i.e., playing)
+        if (isLocked) {
+          ttGrid.enable();
+          ttFill.enable();
+        } else {
+          ttGrid.hide();
+          ttFill.hide();
+          ttGrid.disable();
+          ttFill.disable();
+        }
+      }
+
       function setPlaying(next) {
         playing = !!next;
-        btnPlay.disabled = playing;
-        btnPause.disabled = !playing;
+        playSwitch.checked = playing;
+        playSwitchLabel.textContent = playing ? "Play" : "Paused";
+
+        setControlsLocked(playing);
 
         if (playing) startTimer();
         else stopTimer();
@@ -279,12 +343,11 @@
         timerId = setInterval(tick, intervalMs);
       }
 
-      // Primitive rule: each droplet falls down one cell per tick if empty below.
-      // If droplet is on bottom row, it exits simulation => removed (no lingering references).
+      // Rule: droplet falls down one cell per tick if empty below.
+      // If in bottom row, it exits simulation => removed.
       function tick() {
         if (!playing) return;
 
-        // process bottom row: droplets exit
         if (rows > 0) {
           const bottomStart = (rows - 1) * cols;
           for (let x = 0; x < cols; x++) {
@@ -296,7 +359,6 @@
           }
         }
 
-        // process from second-to-last row upward (bottom-up ensures 1-step-per-tick)
         for (let y = rows - 2; y >= 0; y--) {
           const rowStart = y * cols;
           const belowStart = (y + 1) * cols;
@@ -340,7 +402,7 @@
         };
       }
 
-      // Click to add droplet if one doesn't exist.
+      // Click to add droplet if absent
       elViz.addEventListener("pointerdown", (e) => {
         const cell = e.target.closest?.(".viz-cell");
         if (!cell) return;
@@ -360,22 +422,25 @@
       elRows.addEventListener("input", debounce(() => buildGrid(true), 120));
 
       elMaxFill.addEventListener("change", () => {
-        elMaxFill.value = clampInt(elMaxFill.value, 1, 50);
+        elMaxFill.value = clampInt(elMaxFill.value, LIMITS.maxFillMin, LIMITS.maxFillMax);
       });
 
-      // Whole integers only, 1..99
+      // Whole integers only, 1..30
       elTPS.addEventListener("input", () => {
         const v = elTPS.value;
         if (v.includes(".")) elTPS.value = String(Math.trunc(Number(v) || DEFAULTS.ticksPerSecond));
       });
       elTPS.addEventListener("change", () => {
-        elTPS.value = clampInt(elTPS.value, 1, 99);
+        elTPS.value = clampInt(elTPS.value, LIMITS.tpsMin, LIMITS.tpsMax);
         if (playing) startTimer();
       });
 
-      // Buttons
-      btnPlay.addEventListener("click", () => setPlaying(true));
-      btnPause.addEventListener("click", () => setPlaying(false));
+      // Switch play/pause
+      playSwitch.addEventListener("change", () => {
+        setPlaying(playSwitch.checked);
+      });
+
+      // Reset
       btnReset.addEventListener("click", resetAll);
 
       // Resize
