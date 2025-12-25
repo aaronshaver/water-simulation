@@ -5,515 +5,225 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Water Physics Simulation</title>
 
-  <!-- Bootstrap v5.3.8 (latest stable as of 2025-12-25) -->
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-sRIl4kxILFvY47J16cr9ZwB07vP4J8+LH7qKQnuqkuIAvNWLzeN8tE5YBujZqJLB" crossorigin="anonymous">
+  <!-- Bootstrap v5.3.8 -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/css/bootstrap.min.css" rel="stylesheet"
+        integrity="sha384-sRIl4kxILFvY47J16cr9ZwB07vP4J8+LH7qKQnuqkuIAvNWLzeN8tE5YBujZqJLB" crossorigin="anonymous">
 
   <style>
-    :root{
-      --cell-size: 44px;
-      --cols: 10;
-      --rows: 10;
-    }
-
     html, body { height: 100%; }
     body { min-height: 100vh; }
 
-    .toolbar-wrap{
-      gap: .5rem .75rem;
-    }
-
-    .sim-root{
-      min-height: 0;
-      flex: 1 1 auto;
-      display: flex;
-      flex-direction: column;
-    }
-
-    .grid-viewport{
+    .grid-area {
       flex: 1 1 auto;
       min-height: 0;
       display: flex;
       align-items: center;
       justify-content: center;
       padding: clamp(12px, 2.5vw, 28px);
+      overflow: hidden; /* never scroll */
     }
 
-    .sim-grid{
-      --grid-border: color-mix(in srgb, var(--bs-border-color) 75%, transparent);
+    /* Real grid: each cell has its own border so lines never "fake" */
+    .viz-grid {
       display: grid;
-      grid-template-columns: repeat(var(--cols), var(--cell-size));
-      grid-template-rows: repeat(var(--rows), var(--cell-size));
-      gap: 1px;
-      padding: 1px;
-      background: var(--grid-border);
-      border-radius: .75rem;
-      box-shadow: 0 .75rem 1.5rem rgba(0,0,0,.25);
-      max-width: 100%;
-      max-height: 100%;
-      overflow: hidden;
+      border: 1px solid var(--bs-border-color);
+      border-radius: 0;
+      background: rgba(255,255,255,.02);
+      overflow: hidden; /* never scroll */
+      width: fit-content;
+      height: fit-content;
+
+      /* updated by JS */
+      --cell-size: 44px;
     }
 
-    .cell{
-      position: relative;
+    .viz-cell {
       width: var(--cell-size);
       height: var(--cell-size);
-      background: rgba(255,255,255,.03);
-      cursor: pointer;
-      user-select: none;
-      -webkit-user-select: none;
-      touch-action: none;
+      border-radius: 0;
+      background: transparent;
+
+      /* per-cell borders => true grid */
+      border-right: 1px solid rgba(255,255,255,.10);
+      border-bottom: 1px solid rgba(255,255,255,.10);
     }
 
-    .cell::after{
-      content:"";
-      position:absolute;
-      inset:0;
-      background: radial-gradient(ellipse at 50% 30%, rgba(255,255,255,.07), transparent 60%);
-      opacity: .35;
-      pointer-events:none;
-    }
+    /* avoid double-thick outer edges: remove last row/col internal borders */
+    .viz-cell.last-col { border-right: none; }
+    .viz-cell.last-row { border-bottom: none; }
 
-    .cell:hover{
-      outline: 1px solid rgba(255,255,255,.12);
-      outline-offset: -1px;
-      z-index: 1;
-    }
-
-    .water{
-      position:absolute;
-      left:0;
-      right:0;
-      bottom:0;
-      height: 0%;
-      background: linear-gradient(
-        to top,
-        rgba(13, 202, 240, .82),
-        rgba(13, 202, 240, .48)
-      );
-      border-top-left-radius: .35rem;
-      border-top-right-radius: .35rem;
-      box-shadow: inset 0 1px 0 rgba(255,255,255,.12);
-      transition: height 120ms linear;
-      pointer-events:none;
-    }
-
-    .hint{
-      text-align: center;
-      opacity: .85;
-      padding: 0 1rem 1rem;
-      font-size: .9rem;
-    }
-
-    .mono{
+    .mono {
       font-variant-numeric: tabular-nums;
       font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
     }
-
-    @media (prefers-reduced-motion: reduce){
-      .water{ transition: none; }
-    }
   </style>
 </head>
-<body>
+
+<body class="d-flex flex-column">
+
   <nav class="navbar navbar-expand-lg bg-body-tertiary border-bottom sticky-top">
     <div class="container-fluid">
-      <div class="d-flex align-items-center flex-wrap toolbar-wrap w-100">
-        <div class="navbar-brand fw-semibold me-2 mb-0">Water Physics Simulation</div>
+      <div class="d-flex align-items-center flex-wrap gap-2 w-100">
+        <div class="navbar-brand fw-semibold mb-0 me-2">Water Physics Simulation</div>
 
         <div class="d-flex flex-wrap align-items-center gap-2 ms-auto">
+
           <div class="input-group input-group-sm w-auto">
-            <span class="input-group-text">Grid</span>
-            <input id="gridCols" type="number" class="form-control mono" value="10" min="2" max="200" inputmode="numeric" aria-label="Grid columns" style="max-width: 5.25rem;">
+            <span class="input-group-text">Grid Size</span>
+            <input id="gridCols" type="number" class="form-control mono" value="10" min="2" max="200"
+                   inputmode="numeric" aria-label="Grid columns" style="max-width: 5.5rem;">
             <span class="input-group-text px-2">×</span>
-            <input id="gridRows" type="number" class="form-control mono" value="10" min="2" max="200" inputmode="numeric" aria-label="Grid rows" style="max-width: 5.25rem;">
+            <input id="gridRows" type="number" class="form-control mono" value="10" min="2" max="200"
+                   inputmode="numeric" aria-label="Grid rows" style="max-width: 5.5rem;">
           </div>
 
           <div class="input-group input-group-sm w-auto">
-            <span class="input-group-text">Max fill</span>
-            <input id="maxFill" type="number" class="form-control mono" value="7" min="1" max="999" inputmode="numeric" aria-label="Max fill per cell" style="max-width: 5.25rem;">
+            <span class="input-group-text">Max Fill</span>
+            <input id="maxFill" type="number" class="form-control mono" value="7" min="1" max="999"
+                   inputmode="numeric" aria-label="Max fill" style="max-width: 5.5rem;">
           </div>
 
           <div class="input-group input-group-sm w-auto">
-            <span class="input-group-text">Total water</span>
+            <span class="input-group-text">Total Water Droplets</span>
             <span id="totalWater" class="input-group-text mono fw-semibold">0</span>
           </div>
 
           <div class="input-group input-group-sm w-auto">
             <span class="input-group-text">Ticks/s</span>
-            <input id="ticksPerSecond" type="number" class="form-control mono" value="1" min="0.1" max="240" step="0.1" inputmode="decimal" aria-label="Simulation speed ticks per second" style="max-width: 6rem;">
+            <input id="ticksPerSecond" type="number" class="form-control mono" value="1"
+                   min="1" max="99" step="1" inputmode="numeric" aria-label="Simulation speed"
+                   style="max-width: 6.25rem;">
           </div>
 
           <div class="btn-group btn-group-sm" role="group" aria-label="Simulation controls">
             <button id="btnPlay" type="button" class="btn btn-success" disabled>Play</button>
             <button id="btnPause" type="button" class="btn btn-outline-secondary">Pause</button>
+            <button id="btnReset" type="button" class="btn btn-outline-warning">Reset</button>
           </div>
+
         </div>
       </div>
     </div>
   </nav>
 
-  <div class="sim-root">
-    <div id="gridViewport" class="grid-viewport">
-      <div id="grid" class="sim-grid" aria-label="Water simulation grid"></div>
-    </div>
-    <div class="hint text-body-secondary">
-      Click/drag to add water (Shift = fill cell). Right-click/drag to remove.
-    </div>
-  </div>
+  <main id="gridArea" class="grid-area">
+    <div id="vizGrid" class="viz-grid" aria-label="Visualization grid (UI only)"></div>
+  </main>
 
-  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/js/bootstrap.bundle.min.js" integrity="sha384-FKyoEForCGlyvwx9Hj09JcYn3nv7wiPVlz7YYwJrWVcXK/BmnVDxM+D2scQbITxI" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/js/bootstrap.bundle.min.js"
+          integrity="sha384-FKyoEForCGlyvwx9Hj09JcYn3nv7wiPVlz7YYwJrWVcXK/BmnVDxM+D2scQbITxI"
+          crossorigin="anonymous"></script>
+
   <script>
     (() => {
-      const elGrid = document.getElementById("grid");
-      const elViewport = document.getElementById("gridViewport");
+      const DEFAULTS = Object.freeze({
+        cols: 10,
+        rows: 10,
+        maxFill: 7,
+        ticksPerSecond: 1,
+        totalWater: 0,
+        playing: true
+      });
+
+      const elArea = document.getElementById("gridArea");
+      const elViz  = document.getElementById("vizGrid");
+
       const elCols = document.getElementById("gridCols");
       const elRows = document.getElementById("gridRows");
       const elMaxFill = document.getElementById("maxFill");
       const elTPS = document.getElementById("ticksPerSecond");
       const elTotal = document.getElementById("totalWater");
+
       const btnPlay = document.getElementById("btnPlay");
       const btnPause = document.getElementById("btnPause");
+      const btnReset = document.getElementById("btnReset");
 
-      let cols = 10;
-      let rows = 10;
-      let maxFill = 7;
-      let ticksPerSecond = 1;
+      let playing = DEFAULTS.playing;
 
-      let water = new Uint16Array(cols * rows);
-      let waterEls = []; // per-cell .water elements
-      let tickCount = 0;
-
-      let running = true;
-      let timerId = null;
-      let rafId = null;
-      let renderPending = false;
-
-      function clampInt(n, lo, hi){
-        n = n | 0;
-        if (n < lo) return lo;
-        if (n > hi) return hi;
-        return n;
+      function clampInt(v, lo, hi) {
+        v = Number(v);
+        if (!Number.isFinite(v)) return lo;
+        v = Math.trunc(v);
+        return Math.max(lo, Math.min(hi, v));
       }
 
-      function idx(x, y){ return y * cols + x; }
-
-      function computeTotalWater(){
-        let sum = 0;
-        for (let i = 0; i < water.length; i++) sum += water[i];
-        return sum;
+      function setPlaying(next) {
+        playing = !!next;
+        btnPlay.disabled = playing;
+        btnPause.disabled = !playing;
       }
 
-      function scheduleRender(){
-        if (renderPending) return;
-        renderPending = true;
-        rafId = requestAnimationFrame(() => {
-          renderPending = false;
-          render();
-        });
+      function updateCellSize() {
+        const cols = clampInt(elCols.value, 2, 200);
+        const rows = clampInt(elRows.value, 2, 200);
+
+        const areaRect = elArea.getBoundingClientRect();
+        const areaStyle = getComputedStyle(elArea);
+        const padX = (parseFloat(areaStyle.paddingLeft) || 0) + (parseFloat(areaStyle.paddingRight) || 0);
+        const padY = (parseFloat(areaStyle.paddingTop) || 0) + (parseFloat(areaStyle.paddingBottom) || 0);
+
+        // available space inside centered area
+        const availW = Math.max(0, areaRect.width - padX);
+        const availH = Math.max(0, areaRect.height - padY);
+
+        // account for outer grid border (1px each side)
+        const borderX = 2;
+        const borderY = 2;
+
+        let cell = Math.floor(Math.min((availW - borderX) / cols, (availH - borderY) / rows));
+        if (!Number.isFinite(cell) || cell <= 0) cell = 2;
+
+        // Always fit; allow very small if needed; keep reasonable upper bound
+        cell = Math.max(2, Math.min(140, cell));
+
+        elViz.style.setProperty("--cell-size", cell + "px");
+        elViz.style.width = (cell * cols + borderX) + "px";
+        elViz.style.height = (cell * rows + borderY) + "px";
       }
 
-      function render(){
-        // Update water visuals
-        const mf = maxFill > 0 ? maxFill : 1;
-        for (let i = 0; i < water.length; i++){
-          const w = water[i];
-          const pct = w ? (w / mf) * 100 : 0;
-          waterEls[i].style.height = pct.toFixed(2) + "%";
-        }
-        elTotal.textContent = String(computeTotalWater());
-      }
+      function buildGrid() {
+        const cols = clampInt(elCols.value, 2, 200);
+        const rows = clampInt(elRows.value, 2, 200);
 
-      function rebuildGridDOM(){
-        elGrid.style.setProperty("--cols", cols);
-        elGrid.style.setProperty("--rows", rows);
+        elCols.value = cols;
+        elRows.value = rows;
 
-        elGrid.replaceChildren();
-        waterEls = new Array(cols * rows);
+        elViz.style.gridTemplateColumns = `repeat(${cols}, var(--cell-size))`;
+        elViz.style.gridTemplateRows = `repeat(${rows}, var(--cell-size))`;
+
+        elViz.replaceChildren();
 
         const frag = document.createDocumentFragment();
-        for (let y = 0; y < rows; y++){
-          for (let x = 0; x < cols; x++){
+        for (let y = 0; y < rows; y++) {
+          for (let x = 0; x < cols; x++) {
             const cell = document.createElement("div");
-            cell.className = "cell";
+            cell.className = "viz-cell";
             cell.dataset.x = String(x);
             cell.dataset.y = String(y);
+            cell.dataset.index = String(y * cols + x);
 
-            const w = document.createElement("div");
-            w.className = "water";
-            cell.appendChild(w);
+            if (x === cols - 1) cell.classList.add("last-col");
+            if (y === rows - 1) cell.classList.add("last-row");
 
-            waterEls[idx(x,y)] = w;
             frag.appendChild(cell);
           }
         }
+        elViz.appendChild(frag);
 
-        elGrid.appendChild(frag);
         updateCellSize();
-        scheduleRender();
       }
 
-      function updateCellSize(){
-        const rect = elViewport.getBoundingClientRect();
-        const padding = 16; // already have viewport padding; keep a little extra
-        const availW = Math.max(64, rect.width - padding * 2);
-        const availH = Math.max(64, rect.height - padding * 2);
-
-        const size = Math.floor(Math.min(availW / cols, availH / rows));
-        const cellSize = clampInt(size, 10, 140);
-
-        elGrid.style.setProperty("--cell-size", cellSize + "px");
+      function resetAll() {
+        elCols.value = DEFAULTS.cols;
+        elRows.value = DEFAULTS.rows;
+        elMaxFill.value = DEFAULTS.maxFill;
+        elTPS.value = DEFAULTS.ticksPerSecond;
+        elTotal.textContent = String(DEFAULTS.totalWater);
+        setPlaying(DEFAULTS.playing);
+        buildGrid();
       }
 
-      function resizeGrid(newCols, newRows){
-        newCols = clampInt(newCols, 2, 200);
-        newRows = clampInt(newRows, 2, 200);
-
-        if (newCols === cols && newRows === rows) return;
-
-        const oldCols = cols;
-        const oldRows = rows;
-        const oldWater = water;
-
-        cols = newCols;
-        rows = newRows;
-
-        const newWater = new Uint16Array(cols * rows);
-        const copyCols = Math.min(oldCols, cols);
-        const copyRows = Math.min(oldRows, rows);
-
-        for (let y = 0; y < copyRows; y++){
-          const oldRowStart = y * oldCols;
-          const newRowStart = y * cols;
-          for (let x = 0; x < copyCols; x++){
-            newWater[newRowStart + x] = oldWater[oldRowStart + x];
-          }
-        }
-
-        water = newWater;
-        rebuildGridDOM();
-      }
-
-      function applyMaxFill(newMaxFill){
-        maxFill = clampInt(newMaxFill, 1, 999);
-        for (let i = 0; i < water.length; i++){
-          if (water[i] > maxFill) water[i] = maxFill;
-        }
-        scheduleRender();
-      }
-
-      function stopTimer(){
-        if (timerId !== null){
-          clearInterval(timerId);
-          timerId = null;
-        }
-      }
-
-      function startTimer(){
-        stopTimer();
-        const tps = Math.max(0.1, Number(ticksPerSecond) || 1);
-        const intervalMs = Math.max(1, Math.round(1000 / tps));
-        timerId = setInterval(step, intervalMs);
-      }
-
-      function setRunning(isRunning){
-        running = !!isRunning;
-
-        btnPlay.disabled = running;
-        btnPause.disabled = !running;
-
-        if (running) startTimer();
-        else stopTimer();
-      }
-
-      function addWaterAt(x, y, amount){
-        if (x < 0 || x >= cols || y < 0 || y >= rows) return;
-        const i = idx(x, y);
-        const cur = water[i];
-        const next = cur + amount;
-        water[i] = next > maxFill ? maxFill : next;
-        scheduleRender();
-      }
-
-      function removeWaterAt(x, y, amount){
-        if (x < 0 || x >= cols || y < 0 || y >= rows) return;
-        const i = idx(x, y);
-        const cur = water[i];
-        water[i] = cur > amount ? (cur - amount) : 0;
-        scheduleRender();
-      }
-
-      function step(){
-        if (!running) return;
-
-        tickCount++;
-
-        // Use delta buffer for two-phase updates (prevents bias and chain reactions within same phase).
-        const delta = new Int16Array(water.length);
-
-        // Phase 1: gravity (top -> bottom order is important; we use bottom-up to avoid "skipping" down multiple rows in one phase)
-        for (let y = rows - 2; y >= 0; y--){
-          const rowStart = y * cols;
-          const belowStart = (y + 1) * cols;
-          for (let x = 0; x < cols; x++){
-            const i = rowStart + x;
-            const wHere = water[i] + delta[i];
-            if (wHere <= 0) continue;
-
-            const b = belowStart + x;
-            const wBelow = water[b] + delta[b];
-            const space = maxFill - wBelow;
-            if (space <= 0) continue;
-
-            const move = wHere < space ? wHere : space;
-            delta[i] -= move;
-            delta[b] += move;
-          }
-        }
-
-        // Phase 2: diagonal spill if blocked directly below
-        const preferLeftFirst = (tickCount & 1) === 0;
-        for (let y = rows - 2; y >= 0; y--){
-          const rowStart = y * cols;
-          const belowStart = (y + 1) * cols;
-          for (let x = 0; x < cols; x++){
-            const i = rowStart + x;
-            let wHere = water[i] + delta[i];
-            if (wHere <= 0) continue;
-
-            const b = belowStart + x;
-            const wBelow = water[b] + delta[b];
-            if (wBelow < maxFill) continue;
-
-            // Try down-left / down-right
-            const firstDir = preferLeftFirst ? -1 : 1;
-            const secondDir = -firstDir;
-
-            for (const dir of [firstDir, secondDir]){
-              const nx = x + dir;
-              if (nx < 0 || nx >= cols) continue;
-
-              const d = belowStart + nx;
-              const wDiag = water[d] + delta[d];
-              const space = maxFill - wDiag;
-              if (space <= 0) continue;
-
-              const move = wHere < space ? wHere : space;
-              delta[i] -= move;
-              delta[d] += move;
-              wHere -= move;
-              if (wHere <= 0) break;
-            }
-          }
-        }
-
-        // Phase 3: sideways equalization (limited per tick for stability)
-        for (let y = rows - 1; y >= 0; y--){
-          const rowStart = y * cols;
-          for (let x = 0; x < cols; x++){
-            const i = rowStart + x;
-            let wHere = water[i] + delta[i];
-            if (wHere <= 0) continue;
-
-            const parity = (x + y + tickCount) & 1;
-            const dirs = parity ? [-1, 1] : [1, -1];
-
-            for (const dir of dirs){
-              const nx = x + dir;
-              if (nx < 0 || nx >= cols) continue;
-
-              const j = rowStart + nx;
-              const wThere = water[j] + delta[j];
-              const diff = wHere - wThere;
-              if (diff < 2) continue;
-
-              const space = maxFill - wThere;
-              if (space <= 0) continue;
-
-              const desired = Math.floor(diff / 2);
-              const move = Math.min(desired, space, wHere, 2); // limit sideways movement per tick
-              if (move <= 0) continue;
-
-              delta[i] -= move;
-              delta[j] += move;
-              wHere -= move;
-              if (wHere <= 0) break;
-            }
-          }
-        }
-
-        // Apply deltas (and clamp to [0, maxFill])
-        for (let i = 0; i < water.length; i++){
-          const v = water[i] + delta[i];
-          water[i] = v <= 0 ? 0 : (v >= maxFill ? maxFill : v);
-        }
-
-        scheduleRender();
-      }
-
-      // Pointer interactions (paint add/remove water)
-      let painting = false;
-      let paintMode = "add"; // "add" | "remove"
-      let lastPaintIndex = -1;
-
-      function cellFromEventTarget(t){
-        if (!t) return null;
-        const cell = t.closest ? t.closest(".cell") : null;
-        if (!cell) return null;
-        const x = Number(cell.dataset.x);
-        const y = Number(cell.dataset.y);
-        if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
-        return { x, y, i: idx(x, y) };
-      }
-
-      function paintAt(x, y, shiftKey){
-        const amt = shiftKey ? maxFill : 1;
-        if (paintMode === "add") addWaterAt(x, y, amt);
-        else removeWaterAt(x, y, amt);
-      }
-
-      elGrid.addEventListener("contextmenu", (e) => e.preventDefault());
-
-      elGrid.addEventListener("pointerdown", (e) => {
-        const hit = cellFromEventTarget(e.target);
-        if (!hit) return;
-
-        painting = true;
-        lastPaintIndex = -1;
-
-        if (e.button === 2 || e.ctrlKey) paintMode = "remove";
-        else paintMode = "add";
-
-        elGrid.setPointerCapture?.(e.pointerId);
-
-        if (hit.i !== lastPaintIndex){
-          paintAt(hit.x, hit.y, e.shiftKey);
-          lastPaintIndex = hit.i;
-        }
-      });
-
-      elGrid.addEventListener("pointermove", (e) => {
-        if (!painting) return;
-
-        const hit = cellFromEventTarget(e.target);
-        if (!hit) return;
-
-        if (hit.i !== lastPaintIndex){
-          paintAt(hit.x, hit.y, e.shiftKey);
-          lastPaintIndex = hit.i;
-        }
-      });
-
-      const endPaint = () => {
-        painting = false;
-        lastPaintIndex = -1;
-      };
-
-      elGrid.addEventListener("pointerup", endPaint);
-      elGrid.addEventListener("pointercancel", endPaint);
-      elGrid.addEventListener("pointerleave", () => { /* keep painting if captured */ });
-
-      // Toolbar bindings
-      function debounce(fn, ms){
+      function debounce(fn, ms) {
         let t = null;
         return (...args) => {
           if (t) clearTimeout(t);
@@ -521,37 +231,36 @@
         };
       }
 
-      const debouncedResize = debounce(() => {
-        const newCols = Number(elCols.value);
-        const newRows = Number(elRows.value);
-        resizeGrid(newCols, newRows);
-      }, 150);
+      // Inputs
+      elCols.addEventListener("input", debounce(buildGrid, 120));
+      elRows.addEventListener("input", debounce(buildGrid, 120));
 
-      elCols.addEventListener("input", debouncedResize);
-      elRows.addEventListener("input", debouncedResize);
+      elMaxFill.addEventListener("change", () => {
+        elMaxFill.value = clampInt(elMaxFill.value, 1, 999);
+      });
 
-      elMaxFill.addEventListener("input", debounce(() => {
-        applyMaxFill(Number(elMaxFill.value));
-      }, 100));
+      // Whole integers only, 1..99
+      elTPS.addEventListener("change", () => {
+        elTPS.value = clampInt(elTPS.value, 1, 99);
+      });
+      elTPS.addEventListener("input", () => {
+        // keep it integer while typing (prevents "1.2" etc)
+        const v = elTPS.value;
+        if (v.includes(".")) elTPS.value = String(Math.trunc(Number(v) || DEFAULTS.ticksPerSecond));
+      });
 
-      elTPS.addEventListener("input", debounce(() => {
-        ticksPerSecond = Math.max(0.1, Number(elTPS.value) || 1);
-        if (running) startTimer();
-      }, 150));
+      // Buttons (UI-only)
+      btnPlay.addEventListener("click", () => setPlaying(true));
+      btnPause.addEventListener("click", () => setPlaying(false));
+      btnReset.addEventListener("click", resetAll);
 
-      btnPlay.addEventListener("click", () => setRunning(true));
-      btnPause.addEventListener("click", () => setRunning(false));
-
-      // Resize handling
       const ro = new ResizeObserver(() => updateCellSize());
-      ro.observe(elViewport);
+      ro.observe(elArea);
 
-      window.addEventListener("resize", () => updateCellSize(), { passive: true });
+      window.addEventListener("resize", debounce(updateCellSize, 80), { passive: true });
 
       // Init
-      rebuildGridDOM();
-      ticksPerSecond = 1;
-      setRunning(true); // defaults to playing (Play disabled, Pause enabled)
+      resetAll();
     })();
   </script>
 </body>
