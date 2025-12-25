@@ -10,6 +10,8 @@
         integrity="sha384-sRIl4kxILFvY47J16cr9ZwB07vP4J8+LH7qKQnuqkuIAvNWLzeN8tE5YBujZqJLB" crossorigin="anonymous">
 
   <style>
+    * { box-sizing: border-box; }
+
     html, body { height: 100%; }
     body { min-height: 100vh; }
 
@@ -23,7 +25,7 @@
       overflow: hidden; /* never scroll */
     }
 
-    /* Real grid: each cell has its own border so lines never "fake" */
+    /* Real grid: each cell is a real DOM element, borders are real (not painted). */
     .viz-grid {
       display: grid;
       border: 1px solid var(--bs-border-color);
@@ -33,8 +35,8 @@
       width: fit-content;
       height: fit-content;
 
-      /* updated by JS */
-      --cell-size: 44px;
+      --cell-size: 44px; /* updated by JS */
+      --cell-border: rgba(255,255,255,.10);
     }
 
     .viz-cell {
@@ -43,14 +45,18 @@
       border-radius: 0;
       background: transparent;
 
-      /* per-cell borders => true grid */
-      border-right: 1px solid rgba(255,255,255,.10);
-      border-bottom: 1px solid rgba(255,255,255,.10);
+      /* per-cell borders => true grid lines */
+      border-right: 1px solid var(--cell-border);
+      border-bottom: 1px solid var(--cell-border);
     }
 
-    /* avoid double-thick outer edges: remove last row/col internal borders */
     .viz-cell.last-col { border-right: none; }
     .viz-cell.last-row { border-bottom: none; }
+
+    /* Primitive: water droplet (light blue square) */
+    .viz-cell.has-droplet {
+      background: rgba(13, 202, 240, 0.75);
+    }
 
     .mono {
       font-variant-numeric: tabular-nums;
@@ -79,7 +85,7 @@
 
           <div class="input-group input-group-sm w-auto">
             <span class="input-group-text">Max Fill</span>
-            <input id="maxFill" type="number" class="form-control mono" value="7" min="1" max="999"
+            <input id="maxFill" type="number" class="form-control mono" value="7" min="1" max="50"
                    inputmode="numeric" aria-label="Max fill" style="max-width: 5.5rem;">
           </div>
 
@@ -107,7 +113,7 @@
   </nav>
 
   <main id="gridArea" class="grid-area">
-    <div id="vizGrid" class="viz-grid" aria-label="Visualization grid (UI only)"></div>
+    <div id="vizGrid" class="viz-grid" aria-label="Visualization grid"></div>
   </main>
 
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/js/bootstrap.bundle.min.js"
@@ -121,7 +127,6 @@
         rows: 10,
         maxFill: 7,
         ticksPerSecond: 1,
-        totalWater: 0,
         playing: true
       });
 
@@ -138,7 +143,18 @@
       const btnPause = document.getElementById("btnPause");
       const btnReset = document.getElementById("btnReset");
 
+      let cols = DEFAULTS.cols;
+      let rows = DEFAULTS.rows;
+
+      // Droplet occupancy: 1 = droplet present, 0 = empty.
+      // Using a fixed-size typed array avoids per-droplet object allocations and prevents leak-prone references.
+      let droplets = new Uint8Array(cols * rows);
+
+      // Cache of cell elements (first-class UI elements for each cell).
+      let cellEls = [];
+
       let playing = DEFAULTS.playing;
+      let timerId = null;
 
       function clampInt(v, lo, hi) {
         v = Number(v);
@@ -147,51 +163,76 @@
         return Math.max(lo, Math.min(hi, v));
       }
 
-      function setPlaying(next) {
-        playing = !!next;
-        btnPlay.disabled = playing;
-        btnPause.disabled = !playing;
+      function idx(x, y) { return y * cols + x; }
+
+      function getTicksPerSecond() {
+        return clampInt(elTPS.value, 1, 99);
+      }
+
+      function updateTotal() {
+        let n = 0;
+        for (let i = 0; i < droplets.length; i++) n += droplets[i];
+        elTotal.textContent = String(n);
       }
 
       function updateCellSize() {
-        const cols = clampInt(elCols.value, 2, 200);
-        const rows = clampInt(elRows.value, 2, 200);
-
         const areaRect = elArea.getBoundingClientRect();
         const areaStyle = getComputedStyle(elArea);
         const padX = (parseFloat(areaStyle.paddingLeft) || 0) + (parseFloat(areaStyle.paddingRight) || 0);
         const padY = (parseFloat(areaStyle.paddingTop) || 0) + (parseFloat(areaStyle.paddingBottom) || 0);
 
-        // available space inside centered area
         const availW = Math.max(0, areaRect.width - padX);
         const availH = Math.max(0, areaRect.height - padY);
 
-        // account for outer grid border (1px each side)
-        const borderX = 2;
-        const borderY = 2;
+        // outer border is 1px on each side
+        const outerBorder = 2;
 
-        let cell = Math.floor(Math.min((availW - borderX) / cols, (availH - borderY) / rows));
+        let cell = Math.floor(Math.min((availW - outerBorder) / cols, (availH - outerBorder) / rows));
         if (!Number.isFinite(cell) || cell <= 0) cell = 2;
 
-        // Always fit; allow very small if needed; keep reasonable upper bound
-        cell = Math.max(2, Math.min(140, cell));
+        // Always fit; allow very small if needed.
+        cell = Math.max(2, Math.min(160, cell));
 
         elViz.style.setProperty("--cell-size", cell + "px");
-        elViz.style.width = (cell * cols + borderX) + "px";
-        elViz.style.height = (cell * rows + borderY) + "px";
+        elViz.style.width = (cell * cols + outerBorder) + "px";
+        elViz.style.height = (cell * rows + outerBorder) + "px";
       }
 
-      function buildGrid() {
-        const cols = clampInt(elCols.value, 2, 200);
-        const rows = clampInt(elRows.value, 2, 200);
+      function renderAllDroplets() {
+        for (let i = 0; i < droplets.length; i++) {
+          cellEls[i].classList.toggle("has-droplet", droplets[i] === 1);
+        }
+        updateTotal();
+      }
 
-        elCols.value = cols;
-        elRows.value = rows;
+      function buildGrid(preserveDroplets) {
+        const newCols = clampInt(elCols.value, 2, 200);
+        const newRows = clampInt(elRows.value, 2, 200);
+
+        elCols.value = newCols;
+        elRows.value = newRows;
+
+        let nextDroplets = new Uint8Array(newCols * newRows);
+
+        if (preserveDroplets) {
+          const copyCols = Math.min(cols, newCols);
+          const copyRows = Math.min(rows, newRows);
+          for (let y = 0; y < copyRows; y++) {
+            for (let x = 0; x < copyCols; x++) {
+              nextDroplets[y * newCols + x] = droplets[y * cols + x];
+            }
+          }
+        }
+
+        cols = newCols;
+        rows = newRows;
+        droplets = nextDroplets;
 
         elViz.style.gridTemplateColumns = `repeat(${cols}, var(--cell-size))`;
         elViz.style.gridTemplateRows = `repeat(${rows}, var(--cell-size))`;
 
         elViz.replaceChildren();
+        cellEls = new Array(cols * rows);
 
         const frag = document.createDocumentFragment();
         for (let y = 0; y < rows; y++) {
@@ -205,12 +246,76 @@
             if (x === cols - 1) cell.classList.add("last-col");
             if (y === rows - 1) cell.classList.add("last-row");
 
+            cellEls[y * cols + x] = cell;
             frag.appendChild(cell);
           }
         }
         elViz.appendChild(frag);
 
         updateCellSize();
+        renderAllDroplets();
+      }
+
+      function setPlaying(next) {
+        playing = !!next;
+        btnPlay.disabled = playing;
+        btnPause.disabled = !playing;
+
+        if (playing) startTimer();
+        else stopTimer();
+      }
+
+      function stopTimer() {
+        if (timerId !== null) {
+          clearInterval(timerId);
+          timerId = null;
+        }
+      }
+
+      function startTimer() {
+        stopTimer();
+        const tps = getTicksPerSecond();
+        const intervalMs = Math.max(1, Math.floor(1000 / tps));
+        timerId = setInterval(tick, intervalMs);
+      }
+
+      // Primitive rule: each droplet falls down one cell per tick if empty below.
+      // If droplet is on bottom row, it exits simulation => removed (no lingering references).
+      function tick() {
+        if (!playing) return;
+
+        // process bottom row: droplets exit
+        if (rows > 0) {
+          const bottomStart = (rows - 1) * cols;
+          for (let x = 0; x < cols; x++) {
+            const i = bottomStart + x;
+            if (droplets[i] === 1) {
+              droplets[i] = 0;
+              cellEls[i].classList.remove("has-droplet");
+            }
+          }
+        }
+
+        // process from second-to-last row upward (bottom-up ensures 1-step-per-tick)
+        for (let y = rows - 2; y >= 0; y--) {
+          const rowStart = y * cols;
+          const belowStart = (y + 1) * cols;
+          for (let x = 0; x < cols; x++) {
+            const i = rowStart + x;
+            if (droplets[i] !== 1) continue;
+
+            const b = belowStart + x;
+            if (droplets[b] === 0) {
+              droplets[i] = 0;
+              droplets[b] = 1;
+
+              cellEls[i].classList.remove("has-droplet");
+              cellEls[b].classList.add("has-droplet");
+            }
+          }
+        }
+
+        updateTotal();
       }
 
       function resetAll() {
@@ -218,9 +323,13 @@
         elRows.value = DEFAULTS.rows;
         elMaxFill.value = DEFAULTS.maxFill;
         elTPS.value = DEFAULTS.ticksPerSecond;
-        elTotal.textContent = String(DEFAULTS.totalWater);
+
+        cols = DEFAULTS.cols;
+        rows = DEFAULTS.rows;
+        droplets = new Uint8Array(cols * rows);
+
+        buildGrid(false);
         setPlaying(DEFAULTS.playing);
-        buildGrid();
       }
 
       function debounce(fn, ms) {
@@ -231,32 +340,47 @@
         };
       }
 
+      // Click to add droplet if one doesn't exist.
+      elViz.addEventListener("pointerdown", (e) => {
+        const cell = e.target.closest?.(".viz-cell");
+        if (!cell) return;
+
+        const i = Number(cell.dataset.index);
+        if (!Number.isFinite(i) || i < 0 || i >= droplets.length) return;
+
+        if (droplets[i] === 0) {
+          droplets[i] = 1;
+          cell.classList.add("has-droplet");
+          updateTotal();
+        }
+      });
+
       // Inputs
-      elCols.addEventListener("input", debounce(buildGrid, 120));
-      elRows.addEventListener("input", debounce(buildGrid, 120));
+      elCols.addEventListener("input", debounce(() => buildGrid(true), 120));
+      elRows.addEventListener("input", debounce(() => buildGrid(true), 120));
 
       elMaxFill.addEventListener("change", () => {
-        elMaxFill.value = clampInt(elMaxFill.value, 1, 999);
+        elMaxFill.value = clampInt(elMaxFill.value, 1, 50);
       });
 
       // Whole integers only, 1..99
-      elTPS.addEventListener("change", () => {
-        elTPS.value = clampInt(elTPS.value, 1, 99);
-      });
       elTPS.addEventListener("input", () => {
-        // keep it integer while typing (prevents "1.2" etc)
         const v = elTPS.value;
         if (v.includes(".")) elTPS.value = String(Math.trunc(Number(v) || DEFAULTS.ticksPerSecond));
       });
+      elTPS.addEventListener("change", () => {
+        elTPS.value = clampInt(elTPS.value, 1, 99);
+        if (playing) startTimer();
+      });
 
-      // Buttons (UI-only)
+      // Buttons
       btnPlay.addEventListener("click", () => setPlaying(true));
       btnPause.addEventListener("click", () => setPlaying(false));
       btnReset.addEventListener("click", resetAll);
 
+      // Resize
       const ro = new ResizeObserver(() => updateCellSize());
       ro.observe(elArea);
-
       window.addEventListener("resize", debounce(updateCellSize, 80), { passive: true });
 
       // Init
