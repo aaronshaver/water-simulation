@@ -1,1175 +1,1428 @@
 <!doctype html>
 <html lang="en" data-bs-theme="dark">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Water Physics Simulation</title>
+ <meta charset="utf-8" />
+ <meta name="viewport" content="width=device-width, initial-scale=1" />
+ <title>Water Physics Simulation</title>
 
-  <!-- Bootstrap v5.3.8 -->
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/css/bootstrap.min.css" rel="stylesheet"
-        integrity="sha384-sRIl4kxILFvY47J16cr9ZwB07vP4J8+LH7qKQnuqkuIAvNWLzeN8tE5YBujZqJLB" crossorigin="anonymous">
+ <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/css/bootstrap.min.css" rel="stylesheet"
+       integrity="sha384-sRIl4kxILFvY47J16cr9ZwB07vP4J8+LH7qKQnuqkuIAvNWLzeN8tE5YBujZqJLB" crossorigin="anonymous">
 
-  <style>
-    * { box-sizing: border-box; }
-    html, body { height: 100%; }
-    body { min-height: 100vh; overflow: hidden; } /* never page-scroll */
+ <style>
+   /*------------------------------------------------------------------------*/
+   /*                              BASE STYLES                               */
+   /*------------------------------------------------------------------------*/
 
-    .grid-area {
-      flex: 1 1 auto;
-      min-height: 0;
-      height: 100%;
-      display: flex;
-      align-items: stretch;
-      justify-content: center;
-      padding: clamp(12px, 2.5vw, 28px);
-      overflow: hidden;
-    }
+   * { box-sizing: border-box; }
+   html, body { height: 100%; }
+   body { min-height: 100vh; overflow: hidden; }
 
-    .sim-wrap {
-      width: 100%;
-      height: 100%;
-      min-height: 0;
-      display: grid;
-      grid-template-columns: auto minmax(320px, 420px);
-      gap: 12px;
-      align-items: stretch;
-      justify-content: center;
-    }
+   /*------------------------------------------------------------------------*/
+   /*                           LAYOUT CONTAINERS                            */
+   /*------------------------------------------------------------------------*/
 
-    @media (max-width: 992px) {
-      .sim-wrap {
-        grid-template-columns: 1fr;
-        grid-template-rows: auto minmax(200px, 40vh);
-      }
-    }
+   /* Main flex container for simulation area */
+   .grid-area {
+     flex: 1 1 auto;
+     min-height: 0;
+     height: 100%;
+     display: flex;
+     align-items: stretch;
+     justify-content: center;
+     padding: clamp(12px, 2.5vw, 28px);
+     overflow: hidden;
+   }
 
-    .viz-holder {
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      min-height: 0;
-      height: 100%;
-    }
+   /* Grid layout wrapper for visualization and log panel */
+   .sim-wrap {
+     width: 100%;
+     height: 100%;
+     min-height: 0;
+     display: grid;
+     grid-template-columns: auto minmax(320px, 420px);
+     gap: 12px;
+     align-items: stretch;
+     justify-content: center;
+   }
 
-    .viz-grid {
-      display: grid;
-      border: 1px solid var(--bs-border-color);
-      border-radius: 0;
-      background: rgba(255,255,255,.02);
-      overflow: hidden;
-      width: fit-content;
-      height: fit-content;
+   /* Stack vertically on smaller screens */
+   @media (max-width: 992px) {
+     .sim-wrap {
+       grid-template-columns: 1fr;
+       grid-template-rows: auto minmax(200px, 40vh);
+     }
+   }
 
-      --cell-size: 44px; /* updated by JS */
-      --cell-border: rgba(255,255,255,.10);
-    }
+   .viz-holder {
+     display: flex;
+     align-items: center;
+     justify-content: center;
+     min-height: 0;
+     height: 100%;
+   }
 
-    .viz-cell {
-      position: relative;
-      width: var(--cell-size);
-      height: var(--cell-size);
-      border-radius: 0;
-      background: transparent;
+   /*------------------------------------------------------------------------*/
+   /*                          GRID VISUALIZATION                            */
+   /*------------------------------------------------------------------------*/
 
-      border-right: 1px solid var(--cell-border);
-      border-bottom: 1px solid var(--cell-border);
-    }
-    .viz-cell.last-col { border-right: none; }
-    .viz-cell.last-row { border-bottom: none; }
+   /* Water grid visualization container */
+   .viz-grid {
+     display: grid;
+     border: 1px solid var(--bs-border-color);
+     border-radius: 0;
+     background: rgba(255,255,255,.02);
+     overflow: hidden;
+     width: fit-content;
+     height: fit-content;
 
-    /* Water fill gradients (1..5) */
-    .viz-cell.water-1 { background: #0aa2c0; }
-    .viz-cell.water-2 { background: #088fa9; }
-    .viz-cell.water-3 { background: #077b92; }
-    .viz-cell.water-4 { background: #06687c; }
-    .viz-cell.water-5 { background: #055566; }
+     --cell-size: 44px; /* Dynamically calculated by JavaScript */
+     --cell-border: rgba(255,255,255,.10);
+   }
 
-    /* Solid: darker brown */
-    .viz-cell.is-solid { background: #6f4a22; }
+   /* --- cell styling --- */
+   /* Individual grid cells */
+   .viz-cell {
+     position: relative;
+     width: var(--cell-size);
+     height: var(--cell-size);
+     border-radius: 0;
+     background: transparent;
 
-    /* Tiny white count bottom-right (non-solid only) */
-    .cell-count {
-      position: absolute;
-      right: 2px;
-      bottom: 1px;
-      font-size: 10px;
-      line-height: 1;
-      color: #ffffff;
-      pointer-events: none;
-      user-select: none;
-      -webkit-user-select: none;
-      font-variant-numeric: tabular-nums;
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-    }
-    .viz-cell.is-solid .cell-count { display: none; }
+     border-right: 1px solid var(--cell-border);
+     border-bottom: 1px solid var(--cell-border);
+   }
+   .viz-cell.last-col { border-right: none; }
+   .viz-cell.last-row { border-bottom: none; }
 
-    /* Overflow marker "O" bottom-left (non-solid only) */
-    .cell-over {
-      position: absolute;
-      left: 2px;
-      bottom: 1px;
-      font-size: 10px;
-      line-height: 1;
-      color: #ff2b2b;
-      pointer-events: none;
-      user-select: none;
-      -webkit-user-select: none;
-      font-variant-numeric: tabular-nums;
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-    }
-    .viz-cell.is-solid .cell-over { display: none; }
+   /* Water fill level visual gradients (darker = more water) */
+   .viz-cell.water-1 { background: #0aa2c0; }
+   .viz-cell.water-2 { background: #088fa9; }
+   .viz-cell.water-3 { background: #077b92; }
+   .viz-cell.water-4 { background: #06687c; }
+   .viz-cell.water-5 { background: #055566; }
 
-    .mono {
-      font-variant-numeric: tabular-nums;
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-    }
+   /* Solid obstacle cells */
+   .viz-cell.is-solid { background: #6f4a22; }
 
-    .play-switch {
-      display: inline-flex;
-      align-items: center;
-      gap: .5rem;
-      user-select: none;
-      -webkit-user-select: none;
-      margin: 0;
-    }
-    .play-switch .form-check-input {
-      width: 3.1rem;
-      height: 1.65rem;
-      cursor: pointer;
-    }
-    .play-switch .form-check-label {
-      cursor: pointer;
-      font-weight: 600;
-      letter-spacing: .01em;
-      min-width: 4.75rem;
-    }
+   /* --- cell indicators --- */
+   /* Water count display in bottom-right corner */
+   .cell-count {
+     position: absolute;
+     right: 2px;
+     bottom: 1px;
+     font-size: 10px;
+     line-height: 1;
+     color: #ffffff;
+     pointer-events: none;
+     user-select: none;
+     -webkit-user-select: none;
+     font-variant-numeric: tabular-nums;
+     font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+   }
+   .viz-cell.is-solid .cell-count { display: none; }
 
-    .disabled-wrap { display: inline-block; }
-    .disabled-wrap.locked > * { pointer-events: none; }
+   /* Overflow indicator "O" in bottom-left corner */
+   .cell-over {
+     position: absolute;
+     left: 2px;
+     bottom: 1px;
+     font-size: 10px;
+     line-height: 1;
+     color: #ff2b2b;
+     pointer-events: none;
+     user-select: none;
+     -webkit-user-select: none;
+     font-variant-numeric: tabular-nums;
+     font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+   }
+   .viz-cell.is-solid .cell-over { display: none; }
 
-    .log-panel {
-      border: 1px solid var(--bs-border-color);
-      border-radius: 0;
-      background: rgba(0,0,0,.12);
-      display: flex;
-      flex-direction: column;
-      min-width: 0;
-      height: 100%;
-      min-height: 0;
-      max-height: 100%;
-    }
-    .log-header {
-      border-bottom: 1px solid var(--bs-border-color);
-      padding: .35rem .5rem;
-      font-weight: 600;
-      flex: 0 0 auto;
-    }
-    .log-output {
-      flex: 1 1 auto;
-      min-height: 0;
-      margin: 0;
-      padding: .5rem;
-      overflow: auto; /* ONLY the log scrolls */
-      white-space: pre-wrap;
-      word-break: break-word;
-      font-size: 12px;
-      line-height: 1.25;
-    }
-  </style>
+   /*------------------------------------------------------------------------*/
+   /*                           UI COMPONENTS                                */
+   /*------------------------------------------------------------------------*/
+
+   .mono {
+     font-variant-numeric: tabular-nums;
+     font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+   }
+
+   /* Play/pause toggle switch styling */
+   .play-switch {
+     display: inline-flex;
+     align-items: center;
+     gap: .5rem;
+     user-select: none;
+     -webkit-user-select: none;
+     margin: 0;
+   }
+   .play-switch .form-check-input {
+     width: 3.1rem;
+     height: 1.65rem;
+     cursor: pointer;
+   }
+   .play-switch .form-check-label {
+     cursor: pointer;
+     font-weight: 600;
+     letter-spacing: .01em;
+     min-width: 4.75rem;
+   }
+
+   /* Wrapper for controls that get disabled during playback */
+   .disabled-wrap { display: inline-block; }
+   .disabled-wrap.locked > * { pointer-events: none; }
+
+   /* --- log panel --- */
+   /* Log output panel styling */
+   .log-panel {
+     border: 1px solid var(--bs-border-color);
+     border-radius: 0;
+     background: rgba(0,0,0,.12);
+     display: flex;
+     flex-direction: column;
+     min-width: 0;
+     height: 100%;
+     min-height: 0;
+     max-height: 100%;
+   }
+   .log-header {
+     border-bottom: 1px solid var(--bs-border-color);
+     padding: .35rem .5rem;
+     font-weight: 600;
+     flex: 0 0 auto;
+   }
+   .log-output {
+     flex: 1 1 auto;
+     min-height: 0;
+     margin: 0;
+     padding: .5rem;
+     overflow: auto;
+     white-space: pre-wrap;
+     word-break: break-word;
+     font-size: 12px;
+     line-height: 1.25;
+   }
+ </style>
 </head>
 
 <body class="d-flex flex-column">
 
-  <nav class="navbar navbar-expand-lg bg-body-tertiary border-bottom sticky-top">
-    <div class="container-fluid">
-      <div class="d-flex align-items-center flex-wrap gap-2 w-100">
-        <div class="navbar-brand fw-semibold mb-0 me-2">Water Physics Simulation</div>
-
-        <div class="d-flex flex-wrap align-items-center gap-2 ms-auto">
-
-          <div class="form-check form-switch play-switch">
-            <input id="playSwitch" class="form-check-input" type="checkbox" role="switch">
-            <label id="playSwitchLabel" class="form-check-label" for="playSwitch">Paused</label>
-          </div>
-
-          <span id="gridControlsWrap" class="disabled-wrap"
-                data-bs-toggle="tooltip" data-bs-placement="bottom"
-                data-bs-title="Pause simulation to change">
-            <div class="input-group input-group-sm w-auto">
-              <span class="input-group-text">Grid Size</span>
-              <input id="gridCols" type="number" class="form-control mono" value="10" min="2" max="30"
-                     inputmode="numeric" aria-label="Grid columns" style="max-width: 5.5rem;">
-              <span class="input-group-text px-2">×</span>
-              <input id="gridRows" type="number" class="form-control mono" value="10" min="2" max="30"
-                     inputmode="numeric" aria-label="Grid rows" style="max-width: 5.5rem;">
-            </div>
-          </span>
-
-          <span id="maxFillWrap" class="disabled-wrap"
-                data-bs-toggle="tooltip" data-bs-placement="bottom"
-                data-bs-title="Pause simulation to change">
-            <div class="input-group input-group-sm w-auto">
-              <span class="input-group-text">Max Fill</span>
-              <input id="maxFill" type="number" class="form-control mono" value="3" min="1" max="5"
-                     inputmode="numeric" aria-label="Max fill" style="max-width: 5.5rem;">
-            </div>
-          </span>
-
-          <div class="input-group input-group-sm w-auto">
-            <span class="input-group-text">Total Water</span>
-            <span id="totalWater" class="input-group-text mono fw-semibold">0</span>
-          </div>
-
-          <div class="input-group input-group-sm w-auto">
-            <span class="input-group-text">Ticks/s</span>
-            <input id="ticksPerSecond" type="number" class="form-control mono" value="5"
-                   min="1" max="30" step="1" inputmode="numeric" aria-label="Simulation speed"
-                   style="max-width: 6.25rem;">
-          </div>
-
-          <button id="btnReset" type="button" class="btn btn-outline-warning btn-sm">Reset</button>
-
-        </div>
-      </div>
-    </div>
-  </nav>
-
-  <main id="gridArea" class="grid-area">
-    <div id="simWrap" class="sim-wrap">
-      <div class="viz-holder">
-        <div id="vizGrid" class="viz-grid" aria-label="Visualization grid"></div>
-      </div>
-
-      <div class="log-panel">
-        <div class="log-header">Log</div>
-        <pre id="logOutput" class="log-output mono"></pre>
-      </div>
-    </div>
-  </main>
-
-  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/js/bootstrap.bundle.min.js"
-          integrity="sha384-FKyoEForCGlyvwx9Hj09JcYn3nv7wiPVlz7YYwJrWVcXK/BmnVDxM+D2scQbITxI"
-          crossorigin="anonymous"></script>
-
-  <script>
-    (() => {
-      const DEFAULTS = Object.freeze({
-        cols: 10,
-        rows: 10,
-        maxFill: 3,
-        ticksPerSecond: 5,
-        playing: false
-      });
-
-      const LIMITS = Object.freeze({
-        gridMin: 2,
-        gridMax: 30,
-        maxFillMin: 1,
-        maxFillMax: 5,
-        tpsMin: 1,
-        tpsMax: 30
-      });
-
-      const PRESSURE = Object.freeze({
-        neighborWeight: 0.20,
-        tieThreshold: 0.03
-      });
-
-      const PRESSURE_ATTEMPT_LIMIT = 10;
-
-      // Simple "water finds its level" relaxation
-      const LEVELING = Object.freeze({
-        passesPerTick: 2,
-        minDifferenceToMove: 2
-      });
-      let levelingScanLeftToRight = true;
-
-      const elArea = document.getElementById("gridArea");
-      const elViz  = document.getElementById("vizGrid");
-      const elLog  = document.getElementById("logOutput");
-
-      const gridControlsWrap = document.getElementById("gridControlsWrap");
-      const maxFillWrap = document.getElementById("maxFillWrap");
-
-      const elCols = document.getElementById("gridCols");
-      const elRows = document.getElementById("gridRows");
-      const elMaxFill = document.getElementById("maxFill");
-      const elTPS = document.getElementById("ticksPerSecond");
-      const elTotal = document.getElementById("totalWater");
-
-      const playSwitch = document.getElementById("playSwitch");
-      const playSwitchLabel = document.getElementById("playSwitchLabel");
-      const btnReset = document.getElementById("btnReset");
-
-      let cols = DEFAULTS.cols;
-      let rows = DEFAULTS.rows;
-
-      // Solids: 1 = solid block
-      let solids = new Uint8Array(cols * rows);
-
-      // Per-cell fill counts
-      let fill = new Uint16Array(cols * rows);
-
-      // Overflow markers per cell (derived from droplets each render)
-      let overMark = new Uint8Array(cols * rows);
-
-      // Droplets:
-      // {
-      //   id, x, y,
-      //   momentumDirection: -1|0|+1,
-      //   bottomSeen: boolean,
-      //   restingType: "none"|"solid"|"maxbelow"|"giveup",
-      //   overflowed: boolean,
-      //   pressureAttempts: number
-      // }
-      let droplets = [];
-      let nextDropletId = 0;
-
-      let playing = DEFAULTS.playing;
-      let timerId = null;
-
-      // Logging
-      const logLines = [];
-      const pendingLogs = [];
-      function logMsg(msg) { pendingLogs.push(msg); }
-      function flushLogs() {
-        if (pendingLogs.length === 0) return;
-        for (let i = 0; i < pendingLogs.length; i++) logLines.push(pendingLogs[i]);
-        pendingLogs.length = 0;
-        elLog.textContent = logLines.join("\n");
-        elLog.scrollTop = elLog.scrollHeight;
-      }
-      function dropletLog(dropletId, msg) {
-        logMsg(`droplet ${dropletId}: ${msg}`);
-      }
-      function clearLog() {
-        logLines.length = 0;
-        pendingLogs.length = 0;
-        elLog.textContent = "";
-        elLog.scrollTop = 0;
-      }
-
-      const ttGrid = new bootstrap.Tooltip(gridControlsWrap, { trigger: "hover focus" });
-      const ttFill = new bootstrap.Tooltip(maxFillWrap, { trigger: "hover focus" });
-
-      function clampInt(value, lo, hi) {
-        value = Number(value);
-        if (!Number.isFinite(value)) return lo;
-        value = Math.trunc(value);
-        return Math.max(lo, Math.min(hi, value));
-      }
-
-      function getMaxFill() {
-        return clampInt(elMaxFill.value, LIMITS.maxFillMin, LIMITS.maxFillMax);
-      }
-
-      function getTicksPerSecond() {
-        return clampInt(elTPS.value, LIMITS.tpsMin, LIMITS.tpsMax);
-      }
-
-      function idxOf(x, y) {
-        return y * cols + x;
-      }
-
-      function inBounds(x, y) {
-        return x >= 0 && x < cols && y >= 0 && y < rows;
-      }
-
-      function updateTotal() {
-        elTotal.textContent = String(droplets.length);
-      }
-
-      function updateCellSize() {
-        const areaRect = elArea.getBoundingClientRect();
-        const areaStyle = getComputedStyle(elArea);
-        const padX = (parseFloat(areaStyle.paddingLeft) || 0) + (parseFloat(areaStyle.paddingRight) || 0);
-        const padY = (parseFloat(areaStyle.paddingTop) || 0) + (parseFloat(areaStyle.paddingBottom) || 0);
-
-        const availW = Math.max(0, areaRect.width - padX);
-        const availH = Math.max(0, areaRect.height - padY);
-
-        const outerBorder = 2;
-        let cell = Math.floor(Math.min((availW - outerBorder) / cols, (availH - outerBorder) / rows));
-        if (!Number.isFinite(cell) || cell <= 0) cell = 2;
-        cell = Math.max(2, Math.min(200, cell));
-
-        elViz.style.setProperty("--cell-size", cell + "px");
-        elViz.style.width = (cell * cols + outerBorder) + "px";
-        elViz.style.height = (cell * rows + outerBorder) + "px";
-      }
-
-      function rebuildFill() {
-        fill.fill(0);
-        for (let dropletIndex = 0; dropletIndex < droplets.length; dropletIndex++) {
-          const droplet = droplets[dropletIndex];
-          if (!inBounds(droplet.x, droplet.y)) continue;
-          fill[idxOf(droplet.x, droplet.y)] += 1;
-        }
-      }
-
-      function rebuildOverflowMarkers() {
-        overMark.fill(0);
-        for (let dropletIndex = 0; dropletIndex < droplets.length; dropletIndex++) {
-          const droplet = droplets[dropletIndex];
-          if (!droplet.overflowed) continue;
-          if (!inBounds(droplet.x, droplet.y)) continue;
-          overMark[idxOf(droplet.x, droplet.y)] = 1;
-        }
-      }
-
-      // Pressure model: base fill plus neighbor influence.
-      // IMPORTANT: out-of-bounds and solid neighbors contribute the SAME AS the candidate cell's base.
-      // This prevents edge bias.
-      function computePressureAtCell(x, y, maxFill) {
-        if (!inBounds(x, y)) return Infinity;
-
-        const cellIndex = idxOf(x, y);
-        if (solids[cellIndex] === 1) return Infinity;
-
-        const base = fill[cellIndex] / maxFill;
-
-        const neighborOffsets = [
-          [0, -1],  // up
-          [0,  1],  // down
-          [-1, 0],  // left
-          [ 1, 0]   // right
-        ];
-
-        let neighborSum = 0;
-
-        for (let i = 0; i < neighborOffsets.length; i++) {
-          const neighborX = x + neighborOffsets[i][0];
-          const neighborY = y + neighborOffsets[i][1];
-
-          if (!inBounds(neighborX, neighborY)) {
-            neighborSum += base;
-            continue;
-          }
-
-          const neighborIndex = idxOf(neighborX, neighborY);
-          if (solids[neighborIndex] === 1) {
-            neighborSum += base;
-            continue;
-          }
-
-          neighborSum += (fill[neighborIndex] / maxFill);
-        }
-
-        const neighborAvg = neighborSum / 4;
-        return base + (PRESSURE.neighborWeight * neighborAvg);
-      }
-
-      function renderAll() {
-        rebuildOverflowMarkers();
-
-        const cells = elViz.children;
-        for (let cellIndex = 0; cellIndex < cells.length; cellIndex++) {
-          const cellElement = cells[cellIndex];
-          const isSolid = solids[cellIndex] === 1;
-          const waterCount = isSolid ? 0 : fill[cellIndex];
-
-          cellElement.classList.toggle("is-solid", isSolid);
-
-          cellElement.classList.remove("water-1","water-2","water-3","water-4","water-5");
-          if (!isSolid && waterCount > 0) {
-            const shade = Math.min(5, waterCount);
-            cellElement.classList.add(`water-${shade}`);
-          }
-
-          const countElement = cellElement.children[0];
-          const overflowElement = cellElement.children[1];
-
-          if (!isSolid) {
-            countElement.textContent = String(waterCount);
-            overflowElement.textContent = (overMark[cellIndex] === 1) ? "O" : "";
-          } else {
-            countElement.textContent = "";
-            overflowElement.textContent = "";
-          }
-        }
-
-        updateTotal();
-      }
-
-      function removeDropletAt(index) {
-        const last = droplets.length - 1;
-        if (index < 0 || index > last) return;
-        if (index !== last) droplets[index] = droplets[last];
-        droplets.pop();
-      }
-
-      function removeDropletsInSolidCells() {
-        for (let dropletIndex = droplets.length - 1; dropletIndex >= 0; dropletIndex--) {
-          const droplet = droplets[dropletIndex];
-          if (!inBounds(droplet.x, droplet.y)) {
-            removeDropletAt(dropletIndex);
-            continue;
-          }
-          const cellIndex = idxOf(droplet.x, droplet.y);
-          if (solids[cellIndex] === 1) {
-            dropletLog(droplet.id, "is inside a solid block; removed");
-            removeDropletAt(dropletIndex);
-          }
-        }
-      }
-
-      function clampDropletsToMaxFill(maxFill) {
-        rebuildFill();
-
-        for (let dropletIndex = droplets.length - 1; dropletIndex >= 0; dropletIndex--) {
-          const droplet = droplets[dropletIndex];
-          if (!inBounds(droplet.x, droplet.y)) {
-            removeDropletAt(dropletIndex);
-            continue;
-          }
-
-          const cellIndex = idxOf(droplet.x, droplet.y);
-
-          if (solids[cellIndex] === 1) {
-            dropletLog(droplet.id, "is inside a solid block; removed");
-            removeDropletAt(dropletIndex);
-            continue;
-          }
-
-          if (fill[cellIndex] > maxFill) {
-            dropletLog(droplet.id, "was removed due to max fill clamp");
-            fill[cellIndex] -= 1;
-            removeDropletAt(dropletIndex);
-          }
-        }
-
-        rebuildFill();
-      }
-
-      // Solid density: 20%
-      function scatterSolids() {
-        solids = new Uint8Array(cols * rows);
-
-        const target = Math.floor((cols * rows) / 5); // 20%
-        if (target <= 0) return;
-
-        let placed = 0;
-        let attempts = 0;
-        const maxAttempts = target * 30;
-
-        while (placed < target && attempts < maxAttempts) {
-          attempts++;
-          const cellIndex = (Math.random() * (cols * rows)) | 0;
-          if (solids[cellIndex] === 1) continue;
-          solids[cellIndex] = 1;
-          placed++;
-        }
-      }
-
-      function buildGrid(preserveDroplets) {
-        const newCols = clampInt(elCols.value, LIMITS.gridMin, LIMITS.gridMax);
-        const newRows = clampInt(elRows.value, LIMITS.gridMin, LIMITS.gridMax);
-
-        elCols.value = newCols;
-        elRows.value = newRows;
-
-        if (!preserveDroplets) {
-          droplets = [];
-        } else {
-          for (let dropletIndex = droplets.length - 1; dropletIndex >= 0; dropletIndex--) {
-            const droplet = droplets[dropletIndex];
-            if (droplet.x >= newCols || droplet.y >= newRows) {
-              dropletLog(droplet.id, "fell outside resized grid; removed");
-              removeDropletAt(dropletIndex);
-            }
-          }
-        }
-
-        cols = newCols;
-        rows = newRows;
-
-        solids = new Uint8Array(cols * rows);
-        fill = new Uint16Array(cols * rows);
-        overMark = new Uint8Array(cols * rows);
-
-        elViz.style.gridTemplateColumns = `repeat(${cols}, var(--cell-size))`;
-        elViz.style.gridTemplateRows = `repeat(${rows}, var(--cell-size))`;
-
-        elViz.replaceChildren();
-
-        const fragment = document.createDocumentFragment();
-        for (let y = 0; y < rows; y++) {
-          for (let x = 0; x < cols; x++) {
-            const cell = document.createElement("div");
-            cell.className = "viz-cell";
-            cell.dataset.x = String(x);
-            cell.dataset.y = String(y);
-
-            if (x === cols - 1) cell.classList.add("last-col");
-            if (y === rows - 1) cell.classList.add("last-row");
-
-            const count = document.createElement("span");
-            count.className = "cell-count";
-            count.textContent = "0";
-
-            const overflow = document.createElement("span");
-            overflow.className = "cell-over";
-            overflow.textContent = "";
-
-            cell.appendChild(count);
-            cell.appendChild(overflow);
-
-            fragment.appendChild(cell);
-          }
-        }
-        elViz.appendChild(fragment);
-
-        scatterSolids();
-        removeDropletsInSolidCells();
-        clampDropletsToMaxFill(getMaxFill());
-
-        rebuildFill();
-        updateCellSize();
-        renderAll();
-        flushLogs();
-      }
-
-      function setControlsLocked(isLocked) {
-        elCols.disabled = isLocked;
-        elRows.disabled = isLocked;
-        elMaxFill.disabled = isLocked;
-
-        gridControlsWrap.classList.toggle("locked", isLocked);
-        maxFillWrap.classList.toggle("locked", isLocked);
-
-        if (isLocked) { ttGrid.enable(); ttFill.enable(); }
-        else { ttGrid.hide(); ttFill.hide(); ttGrid.disable(); ttFill.disable(); }
-      }
-
-      function setPlaying(next) {
-        playing = !!next;
-        playSwitch.checked = playing;
-        playSwitchLabel.textContent = playing ? "Play" : "Paused";
-        setControlsLocked(playing);
-
-        if (playing) startTimer();
-        else stopTimer();
-      }
-
-      function stopTimer() {
-        if (timerId !== null) {
-          clearInterval(timerId);
-          timerId = null;
-        }
-      }
-
-      function startTimer() {
-        stopTimer();
-        const ticksPerSecond = getTicksPerSecond();
-        const intervalMs = Math.max(1, Math.floor(1000 / ticksPerSecond));
-        timerId = setInterval(tick, intervalMs);
-      }
-
-      function tryFallOne(dropletIndex, maxFill) {
-        const droplet = droplets[dropletIndex];
-        if (droplet.y >= rows - 1) return false;
-
-        const currentIndex = idxOf(droplet.x, droplet.y);
-        const belowIndex = idxOf(droplet.x, droplet.y + 1);
-
-        if (solids[belowIndex] === 1) return false;
-        if (fill[belowIndex] >= maxFill) return false;
-
-        dropletLog(droplet.id, "dropping down");
-
-        fill[currentIndex] -= 1;
-        fill[belowIndex] += 1;
-
-        droplet.y += 1;
-        droplet.momentumDirection = 0;
-        droplet.restingType = "none";
-        droplet.overflowed = false;
-        droplet.pressureAttempts = 0;
-
-        if (droplet.y === rows - 1) droplet.bottomSeen = true;
-        return true;
-      }
-
-      function trySlideDirection(dropletIndex, direction, maxFill) {
-        const droplet = droplets[dropletIndex];
-        const currentX = droplet.x;
-        const currentY = droplet.y;
-
-        const targetX = currentX + direction;
-        const targetY = currentY;
-
-        if (!inBounds(targetX, targetY)) return false;
-
-        const currentIndex = idxOf(currentX, currentY);
-        const targetIndex = idxOf(targetX, targetY);
-
-        if (solids[targetIndex] === 1) return false;
-        if (fill[targetIndex] >= maxFill) return false;
-
-        fill[currentIndex] -= 1;
-        fill[targetIndex] += 1;
-
-        droplet.x = targetX;
-        droplet.momentumDirection = direction;
-        droplet.restingType = "none";
-        droplet.overflowed = false;
-        droplet.pressureAttempts = 0;
-
-        dropletLog(droplet.id, direction === -1 ? "sliding left" : "sliding right");
-        return true;
-      }
-
-      // Upward attempt:
-      // If multiple are valid, choose lowest fillCount, then lowest pressure, then coin toss.
-      function attemptUpwardTryThree(dropletIndex, maxFill) {
-        const droplet = droplets[dropletIndex];
-        const currentX = droplet.x;
-        const currentY = droplet.y;
-
-        if (currentY === 0) return false;
-
-        const attemptOptions = [
-          { label: "upper-left",  dx: -1 },
-          { label: "upper",       dx:  0 },
-          { label: "upper-right", dx: +1 }
-        ];
-
-        // Randomize attempt order for logging, selection is still by (fill, pressure).
-        const attemptOrder = [];
-        while (attemptOptions.length > 0) {
-          const pick = (Math.random() * attemptOptions.length) | 0;
-          attemptOrder.push(attemptOptions[pick]);
-          attemptOptions.splice(pick, 1);
-        }
-
-        const upperY = currentY - 1;
-        const candidates = [];
-
-        for (let i = 0; i < attemptOrder.length; i++) {
-          const opt = attemptOrder[i];
-          const targetX = currentX + opt.dx;
-          const targetY = upperY;
-
-          dropletLog(droplet.id, `trying ${opt.label}`);
-
-          if (!inBounds(targetX, targetY)) {
-            dropletLog(droplet.id, `${opt.label} is out of bounds`);
-            continue;
-          }
-
-          const targetIndex = idxOf(targetX, targetY);
-
-          if (solids[targetIndex] === 1) {
-            dropletLog(droplet.id, `${opt.label} is a solid block`);
-            continue;
-          }
-
-          if (fill[targetIndex] >= maxFill) {
-            dropletLog(droplet.id, `${opt.label} is max-filled`);
-            continue;
-          }
-
-          candidates.push({
-            label: opt.label,
-            targetX,
-            targetY,
-            targetIndex,
-            fillCount: fill[targetIndex],
-            pressure: computePressureAtCell(targetX, targetY, maxFill)
-          });
-        }
-
-        if (candidates.length === 0) {
-          dropletLog(droplet.id, "oh no, all three upper cells i cannot move to. giving up.");
-          return false;
-        }
-
-        let best = candidates[0];
-        for (let i = 1; i < candidates.length; i++) {
-          const c = candidates[i];
-
-          if (c.fillCount < best.fillCount) {
-            best = c;
-            continue;
-          }
-          if (c.fillCount > best.fillCount) continue;
-
-          const dp = c.pressure - best.pressure;
-          if (dp < -PRESSURE.tieThreshold) {
-            best = c;
-            continue;
-          }
-          if (Math.abs(dp) <= PRESSURE.tieThreshold) {
-            if (Math.random() < 0.5) best = c;
-          }
-        }
-
-        dropletLog(droplet.id, `seeking lower pressure => ${best.label}`);
-
-        const currentIndex = idxOf(currentX, currentY);
-
-        fill[currentIndex] -= 1;
-        fill[best.targetIndex] += 1;
-
-        droplet.x = best.targetX;
-        droplet.y = best.targetY;
-        droplet.momentumDirection = 0;
-        droplet.restingType = "none";
-        droplet.overflowed = false;
-        droplet.bottomSeen = false;
-        droplet.pressureAttempts = 0;
-
-        dropletLog(droplet.id, `moving upward => ${best.label}`);
-        return true;
-      }
-
-      // New behavior when blocked by a max-fill cell below:
-      // - 1/3 slide left, 1/3 slide right, 1/3 rest (stop).
-      // - Do not try more than PRESSURE_ATTEMPT_LIMIT times total; if reached, rest.
-      function handleMaxBelowPressure(dropletIndex, maxFill) {
-        const droplet = droplets[dropletIndex];
-
-        droplet.pressureAttempts += 1;
-        if (droplet.pressureAttempts >= PRESSURE_ATTEMPT_LIMIT) {
-          if (droplet.restingType !== "giveup") {
-            dropletLog(droplet.id, "pressure attempts reached 10; resting");
-          }
-          droplet.restingType = "giveup";
-          droplet.momentumDirection = 0;
-          return;
-        }
-
-        const choice = (Math.random() * 3) | 0; // 0=left, 1=right, 2=rest
-
-        if (choice === 2) {
-          dropletLog(droplet.id, "landed on max-fill below: choice => rest");
-          droplet.restingType = "maxbelow";
-          droplet.momentumDirection = 0;
-          droplet.pressureAttempts = 0;
-          return;
-        }
-
-        const firstDirection = (choice === 0) ? -1 : +1;
-        const secondDirection = -firstDirection;
-
-        dropletLog(droplet.id, `landed on max-fill below: choice => ${firstDirection === -1 ? "left" : "right"}`);
-
-        const movedFirst = trySlideDirection(dropletIndex, firstDirection, maxFill);
-        if (movedFirst) {
-          tryFallOne(dropletIndex, maxFill);
-          return;
-        }
-
-        const movedSecond = trySlideDirection(dropletIndex, secondDirection, maxFill);
-        if (movedSecond) {
-          tryFallOne(dropletIndex, maxFill);
-          return;
-        }
-
-        // Side failed -> try upper trio
-        const movedUp = attemptUpwardTryThree(dropletIndex, maxFill);
-        if (movedUp) {
-          tryFallOne(dropletIndex, maxFill);
-          return;
-        }
-
-        const currentIndex = idxOf(droplet.x, droplet.y);
-        overMark[currentIndex] = 1;
-        droplet.overflowed = true;
-        droplet.restingType = "none";
-        droplet.momentumDirection = 0;
-        droplet.pressureAttempts = 0;
-        dropletLog(droplet.id, "entered overflow state");
-      }
-
-      // -------- Leveling Phase (horizontal relaxation) --------
-
-      function buildCellBuckets() {
-        const buckets = Array.from({ length: cols * rows }, () => []);
-        for (let dropletIndex = 0; dropletIndex < droplets.length; dropletIndex++) {
-          const droplet = droplets[dropletIndex];
-          if (!inBounds(droplet.x, droplet.y)) continue;
-          buckets[idxOf(droplet.x, droplet.y)].push(dropletIndex);
-        }
-        return buckets;
-      }
-
-      function moveOneDropletBetweenCells({
-        fromCellIndex,
-        toCellIndex,
-        toX,
-        toY,
-        buckets
-      }) {
-        const fromBucket = buckets[fromCellIndex];
-        if (fromBucket.length === 0) return false;
-
-        const pickPos = (Math.random() * fromBucket.length) | 0;
-        const pickedDropletIndex = fromBucket[pickPos];
-
-        // swap-pop from source
-        fromBucket[pickPos] = fromBucket[fromBucket.length - 1];
-        fromBucket.pop();
-
-        const droplet = droplets[pickedDropletIndex];
-
-        // update counts first (so pressure is consistent within the pass)
-        fill[fromCellIndex] -= 1;
-        fill[toCellIndex] += 1;
-
-        // move droplet object
-        droplet.x = toX;
-        droplet.y = toY;
-
-        // moving wakes the droplet up
-        droplet.momentumDirection = 0;
-        droplet.restingType = "none";
-        droplet.overflowed = false;
-        droplet.pressureAttempts = 0;
-
-        // add to destination bucket
-        buckets[toCellIndex].push(pickedDropletIndex);
-
-        return droplet;
-      }
-
-      function relaxHorizontallyOnePass({ maxFill, buckets }) {
-        let movedAny = false;
-
-        for (let y = 0; y < rows; y++) {
-          const startX = levelingScanLeftToRight ? 0 : cols - 2;
-          const endX   = levelingScanLeftToRight ? cols - 1 : -1;
-          const step   = levelingScanLeftToRight ? 1 : -1;
-
-          for (let x = startX; x !== endX; x += step) {
-            const leftCellIndex = idxOf(x, y);
-            const rightCellIndex = idxOf(x + 1, y);
-
-            if (solids[leftCellIndex] === 1 || solids[rightCellIndex] === 1) continue;
-
-            const leftFillCount = fill[leftCellIndex];
-            const rightFillCount = fill[rightCellIndex];
-
-            const diff = leftFillCount - rightFillCount;
-
-            if (diff >= LEVELING.minDifferenceToMove && rightFillCount < maxFill) {
-              const movedDroplet = moveOneDropletBetweenCells({
-                fromCellIndex: leftCellIndex,
-                toCellIndex: rightCellIndex,
-                toX: x + 1,
-                toY: y,
-                buckets
-              });
-              if (movedDroplet) {
-                dropletLog(movedDroplet.id, "leveling: moving right");
-                movedAny = true;
-              }
-            } else if (diff <= -LEVELING.minDifferenceToMove && leftFillCount < maxFill) {
-              const movedDroplet = moveOneDropletBetweenCells({
-                fromCellIndex: rightCellIndex,
-                toCellIndex: leftCellIndex,
-                toX: x,
-                toY: y,
-                buckets
-              });
-              if (movedDroplet) {
-                dropletLog(movedDroplet.id, "leveling: moving left");
-                movedAny = true;
-              }
-            }
-          }
-        }
-
-        levelingScanLeftToRight = !levelingScanLeftToRight;
-        return movedAny;
-      }
-
-      function levelingPhase(maxFill) {
-        const buckets = buildCellBuckets();
-
-        for (let pass = 0; pass < LEVELING.passesPerTick; pass++) {
-          const moved = relaxHorizontallyOnePass({ maxFill, buckets });
-          if (!moved) break;
-        }
-      }
-
-      // -------- End Leveling Phase --------
-
-      function tick() {
-        if (!playing) return;
-
-        const maxFill = getMaxFill();
-
-        // bottom-row exit (no extra chatter)
-        for (let dropletIndex = droplets.length - 1; dropletIndex >= 0; dropletIndex--) {
-          const droplet = droplets[dropletIndex];
-          if (droplet.y === rows - 1) {
-            if (droplet.bottomSeen) {
-              dropletLog(droplet.id, "fell out of the bottom; removed");
-              removeDropletAt(dropletIndex);
-            } else {
-              droplet.bottomSeen = true;
-            }
-          }
-        }
-
-        removeDropletsInSolidCells();
-        rebuildFill();
-
-        for (let dropletIndex = 0; dropletIndex < droplets.length; dropletIndex++) {
-          const droplet = droplets[dropletIndex];
-          if (droplet.overflowed) continue;
-          if (droplet.y === rows - 1) continue;
-
-          const currentIndex = idxOf(droplet.x, droplet.y);
-          if (solids[currentIndex] === 1) continue;
-
-          const belowY = droplet.y + 1;
-          const belowIndex = idxOf(droplet.x, belowY);
-
-          // Wake up if a previous rest condition no longer applies
-          if (droplet.restingType === "solid") {
-            if (solids[belowIndex] === 1) continue;
-            droplet.restingType = "none";
-          } else if (droplet.restingType === "maxbelow" || droplet.restingType === "giveup") {
-            if (solids[belowIndex] === 0 && fill[belowIndex] >= maxFill) continue;
-            droplet.restingType = "none";
-            droplet.pressureAttempts = 0;
-          }
-
-          // Solid below: resting
-          if (solids[belowIndex] === 1 && fill[currentIndex] <= maxFill) {
-            droplet.momentumDirection = 0;
-            droplet.pressureAttempts = 0;
-            if (droplet.restingType !== "solid") {
-              dropletLog(droplet.id, "nothing to do; resting");
-              droplet.restingType = "solid";
-            }
-            continue;
-          }
-
-          // 1) prefer down
-          if (solids[belowIndex] === 0 && fill[belowIndex] < maxFill) {
-            dropletLog(droplet.id, "dropping down");
-
-            fill[currentIndex] -= 1;
-            fill[belowIndex] += 1;
-
-            droplet.y = belowY;
-            droplet.momentumDirection = 0;
-            droplet.restingType = "none";
-            droplet.pressureAttempts = 0;
-
-            if (droplet.y === rows - 1) droplet.bottomSeen = true;
-            continue;
-          }
-
-          // Down blocked by max-fill water
-          if (solids[belowIndex] === 0 && fill[belowIndex] >= maxFill) {
-            handleMaxBelowPressure(dropletIndex, maxFill);
-            continue;
-          }
-        }
-
-        // Horizontal leveling to reduce "towers"
-        levelingPhase(maxFill);
-
-        renderAll();
-        flushLogs();
-      }
-
-      function resetAll() {
-        clearLog();
-
-        elCols.value = DEFAULTS.cols;
-        elRows.value = DEFAULTS.rows;
-        elMaxFill.value = DEFAULTS.maxFill;
-        elTPS.value = DEFAULTS.ticksPerSecond;
-
-        droplets = [];
-        cols = DEFAULTS.cols;
-        rows = DEFAULTS.rows;
-
-        solids = new Uint8Array(cols * rows);
-        fill = new Uint16Array(cols * rows);
-        overMark = new Uint8Array(cols * rows);
-
-        buildGrid(false);
-        setPlaying(DEFAULTS.playing);
-      }
-
-      function debounce(fn, ms) {
-        let t = null;
-        return (...args) => {
-          if (t) clearTimeout(t);
-          t = setTimeout(() => fn(...args), ms);
-        };
-      }
-
-      // Click to add droplet (disabled if cell is already max-filled)
-      elViz.addEventListener("pointerdown", (e) => {
-        const cell = e.target.closest?.(".viz-cell");
-        if (!cell) return;
-
-        const x = Number(cell.dataset.x);
-        const y = Number(cell.dataset.y);
-        if (!Number.isFinite(x) || !Number.isFinite(y)) return;
-        if (!inBounds(x, y)) return;
-
-        const cellIndex = idxOf(x, y);
-        if (solids[cellIndex] === 1) return;
-
-        const maxFill = getMaxFill();
-        if (fill[cellIndex] >= maxFill) return;
-
-        const newId = nextDropletId++;
-        droplets.push({
-          id: newId,
-          x,
-          y,
-          momentumDirection: 0,
-          bottomSeen: false,
-          restingType: "none",
-          overflowed: false,
-          pressureAttempts: 0
-        });
-
-        fill[cellIndex] += 1;
-
-        renderAll();
-        flushLogs();
-      });
-
-      // UI inputs
-      elCols.addEventListener("input", debounce(() => buildGrid(true), 120));
-      elRows.addEventListener("input", debounce(() => buildGrid(true), 120));
-
-      elMaxFill.addEventListener("change", () => {
-        elMaxFill.value = clampInt(elMaxFill.value, LIMITS.maxFillMin, LIMITS.maxFillMax);
-        clampDropletsToMaxFill(getMaxFill());
-        renderAll();
-        flushLogs();
-      });
-
-      elTPS.addEventListener("input", () => {
-        const v = elTPS.value;
-        if (v.includes(".")) elTPS.value = String(Math.trunc(Number(v) || DEFAULTS.ticksPerSecond));
-      });
-      elTPS.addEventListener("change", () => {
-        elTPS.value = clampInt(elTPS.value, LIMITS.tpsMin, LIMITS.tpsMax);
-        if (playing) startTimer();
-      });
-
-      playSwitch.addEventListener("change", () => setPlaying(playSwitch.checked));
-      btnReset.addEventListener("click", resetAll);
-
-      const ro = new ResizeObserver(() => updateCellSize());
-      ro.observe(elArea);
-      window.addEventListener("resize", debounce(updateCellSize, 80), { passive: true });
-
-      // Init
-      resetAll();
-    })();
-  </script>
+ <!--======================================================================-->
+ <!--                           NAVIGATION BAR                             -->
+ <!--======================================================================-->
+
+ <nav class="navbar navbar-expand-lg bg-body-tertiary border-bottom sticky-top">
+   <div class="container-fluid">
+     <div class="d-flex align-items-center flex-wrap gap-2 w-100">
+       <div class="navbar-brand fw-semibold mb-0 me-2">Water Physics Simulation</div>
+
+       <div class="d-flex flex-wrap align-items-center gap-2 ms-auto">
+
+         <div class="form-check form-switch play-switch">
+           <input id="playSwitch" class="form-check-input" type="checkbox" role="switch">
+           <label id="playSwitchLabel" class="form-check-label" for="playSwitch">Paused</label>
+         </div>
+
+         <span id="gridControlsWrap" class="disabled-wrap"
+               data-bs-toggle="tooltip" data-bs-placement="bottom"
+               data-bs-title="Pause simulation to change">
+           <div class="input-group input-group-sm w-auto">
+             <span class="input-group-text">Grid Size</span>
+             <input id="gridCols" type="number" class="form-control mono" value="10" min="2" max="30"
+                    inputmode="numeric" aria-label="Grid columns" style="max-width: 5.5rem;">
+             <span class="input-group-text px-2">×</span>
+             <input id="gridRows" type="number" class="form-control mono" value="10" min="2" max="30"
+                    inputmode="numeric" aria-label="Grid rows" style="max-width: 5.5rem;">
+           </div>
+         </span>
+
+         <span id="maxFillWrap" class="disabled-wrap"
+               data-bs-toggle="tooltip" data-bs-placement="bottom"
+               data-bs-title="Pause simulation to change">
+           <div class="input-group input-group-sm w-auto">
+             <span class="input-group-text">Max Fill</span>
+             <input id="maxFill" type="number" class="form-control mono" value="3" min="1" max="5"
+                    inputmode="numeric" aria-label="Max fill" style="max-width: 5.5rem;">
+           </div>
+         </span>
+
+         <div class="input-group input-group-sm w-auto">
+           <span class="input-group-text">Total Water</span>
+           <span id="totalWater" class="input-group-text mono fw-semibold">0</span>
+         </div>
+
+         <div class="input-group input-group-sm w-auto">
+           <span class="input-group-text">Ticks/s</span>
+           <input id="ticksPerSecond" type="number" class="form-control mono" value="5"
+                  min="1" max="30" step="1" inputmode="numeric" aria-label="Simulation speed"
+                  style="max-width: 6.25rem;">
+         </div>
+
+         <button id="btnReset" type="button" class="btn btn-outline-warning btn-sm">Reset</button>
+
+       </div>
+     </div>
+   </div>
+ </nav>
+
+ <!--======================================================================-->
+ <!--                            MAIN CONTENT                              -->
+ <!--======================================================================-->
+
+ <main id="gridArea" class="grid-area">
+   <div id="simWrap" class="sim-wrap">
+     <div class="viz-holder">
+       <div id="vizGrid" class="viz-grid" aria-label="Visualization grid"></div>
+     </div>
+
+     <div class="log-panel">
+       <div class="log-header">Log</div>
+       <pre id="logOutput" class="log-output mono"></pre>
+     </div>
+   </div>
+ </main>
+
+ <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/js/bootstrap.bundle.min.js"
+         integrity="sha384-FKyoEForCGlyvwx9Hj09JcYn3nv7wiPVlz7YYwJrWVcXK/BmnVDxM+D2scQbITxI"
+         crossorigin="anonymous"></script>
+
+ <script>
+   (() => {
+     //----------------------------------------------------------------------
+     //                      CONSTANTS AND CONFIGURATION
+     //----------------------------------------------------------------------
+
+     const DEFAULTS = Object.freeze({
+       cols: 10,
+       rows: 10,
+       maxFill: 3,
+       ticksPerSecond: 5,
+       playing: false
+     });
+
+     const LIMITS = Object.freeze({
+       gridMin: 2,
+       gridMax: 30,
+       maxFillMin: 1,
+       maxFillMax: 5,
+       tpsMin: 1,
+       tpsMax: 30
+     });
+
+     const PRESSURE = Object.freeze({
+       neighborWeight: 0.20,
+       tieThreshold: 0.03
+     });
+
+     const PRESSURE_ATTEMPT_LIMIT = 10;
+
+     const LEVELING = Object.freeze({
+       passesPerTick: 2,
+       minDifferenceToMove: 2
+     });
+     let levelingScanLeftToRight = true;
+
+     //----------------------------------------------------------------------
+     //                         ELEMENT REFERENCES
+     //----------------------------------------------------------------------
+
+     const elArea = document.getElementById("gridArea");
+     const elViz  = document.getElementById("vizGrid");
+     const elLog  = document.getElementById("logOutput");
+
+     const gridControlsWrap = document.getElementById("gridControlsWrap");
+     const maxFillWrap = document.getElementById("maxFillWrap");
+
+     const elCols = document.getElementById("gridCols");
+     const elRows = document.getElementById("gridRows");
+     const elMaxFill = document.getElementById("maxFill");
+     const elTPS = document.getElementById("ticksPerSecond");
+     const elTotal = document.getElementById("totalWater");
+
+     const playSwitch = document.getElementById("playSwitch");
+     const playSwitchLabel = document.getElementById("playSwitchLabel");
+     const btnReset = document.getElementById("btnReset");
+
+     //----------------------------------------------------------------------
+     //                          SIMULATION STATE
+     //----------------------------------------------------------------------
+
+     let cols = DEFAULTS.cols;
+     let rows = DEFAULTS.rows;
+
+     /** @type {Uint8Array} Grid of solid obstacles (1 = solid, 0 = empty) */
+     let solids = new Uint8Array(cols * rows);
+
+     /** @type {Uint16Array} Water count per cell */
+     let fill = new Uint16Array(cols * rows);
+
+     /** @type {Uint8Array} Overflow markers per cell (1 = overflowing, 0 = normal) */
+     let overMark = new Uint8Array(cols * rows);
+
+     /**
+      * @typedef {Object} Droplet
+      * @property {number} id - Unique identifier for logging
+      * @property {number} x - Current x position
+      * @property {number} y - Current y position
+      * @property {-1|0|1} momentumDirection - Horizontal momentum direction
+      * @property {boolean} bottomSeen - Whether droplet has touched the bottom edge
+      * @property {"none"|"solid"|"maxbelow"|"giveup"} restingType - Current resting state
+      * @property {boolean} overflowed - Whether droplet is in overflow state
+      * @property {number} pressureAttempts - Count of pressure-based movement attempts
+      */
+
+     /** @type {Droplet[]} */
+     let droplets = [];
+     let nextDropletId = 0;
+
+     let playing = DEFAULTS.playing;
+     let timerId = null;
+
+     //----------------------------------------------------------------------
+     //                          LOGGING SYSTEM
+     //----------------------------------------------------------------------
+
+     const logLines = [];
+     const pendingLogs = [];
+
+     /**
+      * Queues a message for the log output
+      * @param {string} msg - Message to log
+      */
+     function logMsg(msg) { pendingLogs.push(msg); }
+
+     /**
+      * Flushes pending log messages to the visible log
+      */
+     function flushLogs() {
+       if (pendingLogs.length === 0) return;
+       for (let i = 0; i < pendingLogs.length; i++) logLines.push(pendingLogs[i]);
+       pendingLogs.length = 0;
+       elLog.textContent = logLines.join("\n");
+       elLog.scrollTop = elLog.scrollHeight;
+     }
+
+     /**
+      * Logs a message associated with a specific droplet
+      * @param {number} dropletId - Droplet ID for the log entry
+      * @param {string} msg - Message to log
+      */
+     function dropletLog(dropletId, msg) {
+       logMsg(`droplet ${dropletId}: ${msg}`);
+     }
+
+     /**
+      * Clears all log entries
+      */
+     function clearLog() {
+       logLines.length = 0;
+       pendingLogs.length = 0;
+       elLog.textContent = "";
+       elLog.scrollTop = 0;
+     }
+
+     //----------------------------------------------------------------------
+     //                         BOOTSTRAP TOOLTIPS
+     //----------------------------------------------------------------------
+
+     const ttGrid = new bootstrap.Tooltip(gridControlsWrap, { trigger: "hover focus" });
+     const ttFill = new bootstrap.Tooltip(maxFillWrap, { trigger: "hover focus" });
+
+     //----------------------------------------------------------------------
+     //                          UTILITY FUNCTIONS
+     //----------------------------------------------------------------------
+
+     /**
+      * Clamps a value to an integer within specified bounds
+      * @param {number} value - Value to clamp
+      * @param {number} lo - Lower bound
+      * @param {number} hi - Upper bound
+      * @returns {number} Clamped integer value
+      */
+     function clampInt(value, lo, hi) {
+       value = Number(value);
+       if (!Number.isFinite(value)) return lo;
+       value = Math.trunc(value);
+       return Math.max(lo, Math.min(hi, value));
+     }
+
+     /**
+      * Gets the current max fill value from the UI
+      * @returns {number} Maximum water units per cell
+      */
+     function getMaxFill() {
+       return clampInt(elMaxFill.value, LIMITS.maxFillMin, LIMITS.maxFillMax);
+     }
+
+     /**
+      * Gets the current simulation speed from the UI
+      * @returns {number} Ticks per second
+      */
+     function getTicksPerSecond() {
+       return clampInt(elTPS.value, LIMITS.tpsMin, LIMITS.tpsMax);
+     }
+
+     /**
+      * Converts 2D coordinates to 1D array index
+      * @param {number} x - X coordinate
+      * @param {number} y - Y coordinate
+      * @returns {number} Array index
+      */
+     function idxOf(x, y) {
+       return y * cols + x;
+     }
+
+     /**
+      * Checks if coordinates are within grid bounds
+      * @param {number} x - X coordinate
+      * @param {number} y - Y coordinate
+      * @returns {boolean} True if coordinates are valid
+      */
+     function inBounds(x, y) {
+       return x >= 0 && x < cols && y >= 0 && y < rows;
+     }
+
+     /**
+      * Creates a debounced version of a function
+      * @param {Function} fn - Function to debounce
+      * @param {number} ms - Debounce delay in milliseconds
+      * @returns {Function} Debounced function
+      */
+     function debounce(fn, ms) {
+       let t = null;
+       return (...args) => {
+         if (t) clearTimeout(t);
+         t = setTimeout(() => fn(...args), ms);
+       };
+     }
+
+     //----------------------------------------------------------------------
+     //                         DISPLAY FUNCTIONS
+     //----------------------------------------------------------------------
+
+     /**
+      * Updates the total water count display
+      */
+     function updateTotal() {
+       elTotal.textContent = String(droplets.length);
+     }
+
+     /**
+      * Calculates and updates the cell size CSS variable based on available space
+      */
+     function updateCellSize() {
+       const areaRect = elArea.getBoundingClientRect();
+       const areaStyle = getComputedStyle(elArea);
+       const padX = (parseFloat(areaStyle.paddingLeft) || 0) + (parseFloat(areaStyle.paddingRight) || 0);
+       const padY = (parseFloat(areaStyle.paddingTop) || 0) + (parseFloat(areaStyle.paddingBottom) || 0);
+
+       const availW = Math.max(0, areaRect.width - padX);
+       const availH = Math.max(0, areaRect.height - padY);
+
+       const outerBorder = 2;
+       let cell = Math.floor(Math.min((availW - outerBorder) / cols, (availH - outerBorder) / rows));
+       if (!Number.isFinite(cell) || cell <= 0) cell = 2;
+       cell = Math.max(2, Math.min(200, cell));
+
+       elViz.style.setProperty("--cell-size", cell + "px");
+       elViz.style.width = (cell * cols + outerBorder) + "px";
+       elViz.style.height = (cell * rows + outerBorder) + "px";
+     }
+
+     /**
+      * Updates all visual elements based on current simulation state
+      */
+     function renderAll() {
+       rebuildOverflowMarkers();
+
+       const cells = elViz.children;
+       for (let cellIndex = 0; cellIndex < cells.length; cellIndex++) {
+         const cellElement = cells[cellIndex];
+         const isSolid = solids[cellIndex] === 1;
+         const waterCount = isSolid ? 0 : fill[cellIndex];
+
+         cellElement.classList.toggle("is-solid", isSolid);
+
+         cellElement.classList.remove("water-1","water-2","water-3","water-4","water-5");
+         if (!isSolid && waterCount > 0) {
+           const shade = Math.min(5, waterCount);
+           cellElement.classList.add(`water-${shade}`);
+         }
+
+         const countElement = cellElement.children[0];
+         const overflowElement = cellElement.children[1];
+
+         if (!isSolid) {
+           countElement.textContent = String(waterCount);
+           overflowElement.textContent = (overMark[cellIndex] === 1) ? "O" : "";
+         } else {
+           countElement.textContent = "";
+           overflowElement.textContent = "";
+         }
+       }
+
+       updateTotal();
+     }
+
+     //----------------------------------------------------------------------
+     //                       GRID DATA MANAGEMENT
+     //----------------------------------------------------------------------
+
+     /**
+      * Recalculates the fill array from current droplet positions
+      */
+     function rebuildFill() {
+       fill.fill(0);
+       for (let dropletIndex = 0; dropletIndex < droplets.length; dropletIndex++) {
+         const droplet = droplets[dropletIndex];
+         if (!inBounds(droplet.x, droplet.y)) continue;
+         fill[idxOf(droplet.x, droplet.y)] += 1;
+       }
+     }
+
+     /**
+      * Rebuilds overflow markers based on droplet overflow states
+      */
+     function rebuildOverflowMarkers() {
+       overMark.fill(0);
+       for (let dropletIndex = 0; dropletIndex < droplets.length; dropletIndex++) {
+         const droplet = droplets[dropletIndex];
+         if (!droplet.overflowed) continue;
+         if (!inBounds(droplet.x, droplet.y)) continue;
+         overMark[idxOf(droplet.x, droplet.y)] = 1;
+       }
+     }
+
+     //----------------------------------------------------------------------
+     //                        DROPLET MANAGEMENT
+     //----------------------------------------------------------------------
+
+     /**
+      * Removes a droplet from the array by index using swap-and-pop
+      * @param {number} index - Index of droplet to remove
+      */
+     function removeDropletAt(index) {
+       const last = droplets.length - 1;
+       if (index < 0 || index > last) return;
+       if (index !== last) droplets[index] = droplets[last];
+       droplets.pop();
+     }
+
+     /**
+      * Removes all droplets that are inside solid cells
+      */
+     function removeDropletsInSolidCells() {
+       for (let dropletIndex = droplets.length - 1; dropletIndex >= 0; dropletIndex--) {
+         const droplet = droplets[dropletIndex];
+         if (!inBounds(droplet.x, droplet.y)) {
+           removeDropletAt(dropletIndex);
+           continue;
+         }
+         const cellIndex = idxOf(droplet.x, droplet.y);
+         if (solids[cellIndex] === 1) {
+           dropletLog(droplet.id, "is inside a solid block; removed");
+           removeDropletAt(dropletIndex);
+         }
+       }
+     }
+
+     /**
+      * Removes excess droplets from cells that exceed maxFill
+      * @param {number} maxFill - Maximum allowed droplets per cell
+      */
+     function clampDropletsToMaxFill(maxFill) {
+       rebuildFill();
+
+       for (let dropletIndex = droplets.length - 1; dropletIndex >= 0; dropletIndex--) {
+         const droplet = droplets[dropletIndex];
+         if (!inBounds(droplet.x, droplet.y)) {
+           removeDropletAt(dropletIndex);
+           continue;
+         }
+
+         const cellIndex = idxOf(droplet.x, droplet.y);
+
+         if (solids[cellIndex] === 1) {
+           dropletLog(droplet.id, "is inside a solid block; removed");
+           removeDropletAt(dropletIndex);
+           continue;
+         }
+
+         if (fill[cellIndex] > maxFill) {
+           dropletLog(droplet.id, "was removed due to max fill clamp");
+           fill[cellIndex] -= 1;
+           removeDropletAt(dropletIndex);
+         }
+       }
+
+       rebuildFill();
+     }
+
+     //----------------------------------------------------------------------
+     //                         GRID GENERATION
+     //----------------------------------------------------------------------
+
+     /**
+      * Randomly places solid obstacles across approximately 20% of the grid
+      */
+     function scatterSolids() {
+       solids = new Uint8Array(cols * rows);
+
+       const target = Math.floor((cols * rows) / 5); // 20%
+       if (target <= 0) return;
+
+       let placed = 0;
+       let attempts = 0;
+       const maxAttempts = target * 30;
+
+       while (placed < target && attempts < maxAttempts) {
+         attempts++;
+         const cellIndex = (Math.random() * (cols * rows)) | 0;
+         if (solids[cellIndex] === 1) continue;
+         solids[cellIndex] = 1;
+         placed++;
+       }
+     }
+
+     /**
+      * Rebuilds the grid with new dimensions and optionally preserves droplets
+      * @param {boolean} preserveDroplets - Whether to keep existing droplets
+      */
+     function buildGrid(preserveDroplets) {
+       const newCols = clampInt(elCols.value, LIMITS.gridMin, LIMITS.gridMax);
+       const newRows = clampInt(elRows.value, LIMITS.gridMin, LIMITS.gridMax);
+
+       elCols.value = newCols;
+       elRows.value = newRows;
+
+       if (!preserveDroplets) {
+         droplets = [];
+       } else {
+         for (let dropletIndex = droplets.length - 1; dropletIndex >= 0; dropletIndex--) {
+           const droplet = droplets[dropletIndex];
+           if (droplet.x >= newCols || droplet.y >= newRows) {
+             dropletLog(droplet.id, "fell outside resized grid; removed");
+             removeDropletAt(dropletIndex);
+           }
+         }
+       }
+
+       cols = newCols;
+       rows = newRows;
+
+       solids = new Uint8Array(cols * rows);
+       fill = new Uint16Array(cols * rows);
+       overMark = new Uint8Array(cols * rows);
+
+       elViz.style.gridTemplateColumns = `repeat(${cols}, var(--cell-size))`;
+       elViz.style.gridTemplateRows = `repeat(${rows}, var(--cell-size))`;
+
+       elViz.replaceChildren();
+
+       const fragment = document.createDocumentFragment();
+       for (let y = 0; y < rows; y++) {
+         for (let x = 0; x < cols; x++) {
+           const cell = document.createElement("div");
+           cell.className = "viz-cell";
+           cell.dataset.x = String(x);
+           cell.dataset.y = String(y);
+
+           if (x === cols - 1) cell.classList.add("last-col");
+           if (y === rows - 1) cell.classList.add("last-row");
+
+           const count = document.createElement("span");
+           count.className = "cell-count";
+           count.textContent = "0";
+
+           const overflow = document.createElement("span");
+           overflow.className = "cell-over";
+           overflow.textContent = "";
+
+           cell.appendChild(count);
+           cell.appendChild(overflow);
+
+           fragment.appendChild(cell);
+         }
+       }
+       elViz.appendChild(fragment);
+
+       scatterSolids();
+       removeDropletsInSolidCells();
+       clampDropletsToMaxFill(getMaxFill());
+
+       rebuildFill();
+       updateCellSize();
+       renderAll();
+       flushLogs();
+     }
+
+     //----------------------------------------------------------------------
+     //                        UI STATE MANAGEMENT
+     //----------------------------------------------------------------------
+
+     /**
+      * Locks or unlocks controls that shouldn't be changed during simulation
+      * @param {boolean} isLocked - Whether controls should be locked
+      */
+     function setControlsLocked(isLocked) {
+       elCols.disabled = isLocked;
+       elRows.disabled = isLocked;
+       elMaxFill.disabled = isLocked;
+
+       gridControlsWrap.classList.toggle("locked", isLocked);
+       maxFillWrap.classList.toggle("locked", isLocked);
+
+       if (isLocked) { ttGrid.enable(); ttFill.enable(); }
+       else { ttGrid.hide(); ttFill.hide(); ttGrid.disable(); ttFill.disable(); }
+     }
+
+     /**
+      * Sets the play/pause state of the simulation
+      * @param {boolean} next - Whether simulation should be playing
+      */
+     function setPlaying(next) {
+       playing = !!next;
+       playSwitch.checked = playing;
+       playSwitchLabel.textContent = playing ? "Play" : "Paused";
+       setControlsLocked(playing);
+
+       if (playing) startTimer();
+       else stopTimer();
+     }
+
+     /**
+      * Stops the simulation timer
+      */
+     function stopTimer() {
+       if (timerId !== null) {
+         clearInterval(timerId);
+         timerId = null;
+       }
+     }
+
+     /**
+      * Starts the simulation timer based on current ticks per second setting
+      */
+     function startTimer() {
+       stopTimer();
+       const ticksPerSecond = getTicksPerSecond();
+       const intervalMs = Math.max(1, Math.floor(1000 / ticksPerSecond));
+       timerId = setInterval(tick, intervalMs);
+     }
+
+     /**
+      * Resets the simulation to default state
+      */
+     function resetAll() {
+       clearLog();
+
+       elCols.value = DEFAULTS.cols;
+       elRows.value = DEFAULTS.rows;
+       elMaxFill.value = DEFAULTS.maxFill;
+       elTPS.value = DEFAULTS.ticksPerSecond;
+
+       droplets = [];
+       cols = DEFAULTS.cols;
+       rows = DEFAULTS.rows;
+
+       solids = new Uint8Array(cols * rows);
+       fill = new Uint16Array(cols * rows);
+       overMark = new Uint8Array(cols * rows);
+
+       buildGrid(false);
+       setPlaying(DEFAULTS.playing);
+     }
+
+     //----------------------------------------------------------------------
+     //                         PHYSICS - PRESSURE
+     //----------------------------------------------------------------------
+
+     /**
+      * Computes pressure at a cell based on its fill and neighboring cells.
+      * Out-of-bounds and solid neighbors contribute the same as the candidate cell's base
+      * to prevent edge bias.
+      * @param {number} x - X coordinate
+      * @param {number} y - Y coordinate
+      * @param {number} maxFill - Maximum fill per cell
+      * @returns {number} Pressure value (Infinity for invalid cells)
+      */
+     function computePressureAtCell(x, y, maxFill) {
+       if (!inBounds(x, y)) return Infinity;
+
+       const cellIndex = idxOf(x, y);
+       if (solids[cellIndex] === 1) return Infinity;
+
+       const base = fill[cellIndex] / maxFill;
+
+       const neighborOffsets = [
+         [0, -1],  // up
+         [0,  1],  // down
+         [-1, 0],  // left
+         [ 1, 0]   // right
+       ];
+
+       let neighborSum = 0;
+
+       for (let i = 0; i < neighborOffsets.length; i++) {
+         const neighborX = x + neighborOffsets[i][0];
+         const neighborY = y + neighborOffsets[i][1];
+
+         if (!inBounds(neighborX, neighborY)) {
+           neighborSum += base;
+           continue;
+         }
+
+         const neighborIndex = idxOf(neighborX, neighborY);
+         if (solids[neighborIndex] === 1) {
+           neighborSum += base;
+           continue;
+         }
+
+         neighborSum += (fill[neighborIndex] / maxFill);
+       }
+
+       const neighborAvg = neighborSum / 4;
+       return base + (PRESSURE.neighborWeight * neighborAvg);
+     }
+
+     //----------------------------------------------------------------------
+     //                         PHYSICS - MOVEMENT
+     //----------------------------------------------------------------------
+
+     /**
+      * Attempts to move a droplet down by one cell
+      * @param {number} dropletIndex - Index of droplet to move
+      * @param {number} maxFill - Maximum fill per cell
+      * @returns {boolean} True if droplet moved successfully
+      */
+     function tryFallOne(dropletIndex, maxFill) {
+       const droplet = droplets[dropletIndex];
+       if (droplet.y >= rows - 1) return false;
+
+       const currentIndex = idxOf(droplet.x, droplet.y);
+       const belowIndex = idxOf(droplet.x, droplet.y + 1);
+
+       if (solids[belowIndex] === 1) return false;
+       if (fill[belowIndex] >= maxFill) return false;
+
+       dropletLog(droplet.id, "dropping down");
+
+       fill[currentIndex] -= 1;
+       fill[belowIndex] += 1;
+
+       droplet.y += 1;
+       droplet.momentumDirection = 0;
+       droplet.restingType = "none";
+       droplet.overflowed = false;
+       droplet.pressureAttempts = 0;
+
+       if (droplet.y === rows - 1) droplet.bottomSeen = true;
+       return true;
+     }
+
+     /**
+      * Attempts to slide a droplet horizontally
+      * @param {number} dropletIndex - Index of droplet to move
+      * @param {-1|1} direction - Direction to slide (-1 = left, 1 = right)
+      * @param {number} maxFill - Maximum fill per cell
+      * @returns {boolean} True if droplet moved successfully
+      */
+     function trySlideDirection(dropletIndex, direction, maxFill) {
+       const droplet = droplets[dropletIndex];
+       const currentX = droplet.x;
+       const currentY = droplet.y;
+
+       const targetX = currentX + direction;
+       const targetY = currentY;
+
+       if (!inBounds(targetX, targetY)) return false;
+
+       const currentIndex = idxOf(currentX, currentY);
+       const targetIndex = idxOf(targetX, targetY);
+
+       if (solids[targetIndex] === 1) return false;
+       if (fill[targetIndex] >= maxFill) return false;
+
+       fill[currentIndex] -= 1;
+       fill[targetIndex] += 1;
+
+       droplet.x = targetX;
+       droplet.momentumDirection = direction;
+       droplet.restingType = "none";
+       droplet.overflowed = false;
+       droplet.pressureAttempts = 0;
+
+       dropletLog(droplet.id, direction === -1 ? "sliding left" : "sliding right");
+       return true;
+     }
+
+     /**
+      * Attempts to move a droplet upward to one of three cells.
+      * Selection prioritizes lowest fill count, then lowest pressure, then random.
+      * @param {number} dropletIndex - Index of droplet to move
+      * @param {number} maxFill - Maximum fill per cell
+      * @returns {boolean} True if droplet moved successfully
+      */
+     function attemptUpwardTryThree(dropletIndex, maxFill) {
+       const droplet = droplets[dropletIndex];
+       const currentX = droplet.x;
+       const currentY = droplet.y;
+
+       if (currentY === 0) return false;
+
+       const attemptOptions = [
+         { label: "upper-left",  dx: -1 },
+         { label: "upper",       dx:  0 },
+         { label: "upper-right", dx: +1 }
+       ];
+
+       const attemptOrder = [];
+       while (attemptOptions.length > 0) {
+         const pick = (Math.random() * attemptOptions.length) | 0;
+         attemptOrder.push(attemptOptions[pick]);
+         attemptOptions.splice(pick, 1);
+       }
+
+       const upperY = currentY - 1;
+       const candidates = [];
+
+       for (let i = 0; i < attemptOrder.length; i++) {
+         const opt = attemptOrder[i];
+         const targetX = currentX + opt.dx;
+         const targetY = upperY;
+
+         dropletLog(droplet.id, `trying ${opt.label}`);
+
+         if (!inBounds(targetX, targetY)) {
+           dropletLog(droplet.id, `${opt.label} is out of bounds`);
+           continue;
+         }
+
+         const targetIndex = idxOf(targetX, targetY);
+
+         if (solids[targetIndex] === 1) {
+           dropletLog(droplet.id, `${opt.label} is a solid block`);
+           continue;
+         }
+
+         if (fill[targetIndex] >= maxFill) {
+           dropletLog(droplet.id, `${opt.label} is max-filled`);
+           continue;
+         }
+
+         candidates.push({
+           label: opt.label,
+           targetX,
+           targetY,
+           targetIndex,
+           fillCount: fill[targetIndex],
+           pressure: computePressureAtCell(targetX, targetY, maxFill)
+         });
+       }
+
+       if (candidates.length === 0) {
+         dropletLog(droplet.id, "oh no, all three upper cells i cannot move to. giving up.");
+         return false;
+       }
+
+       let best = candidates[0];
+       for (let i = 1; i < candidates.length; i++) {
+         const c = candidates[i];
+
+         if (c.fillCount < best.fillCount) {
+           best = c;
+           continue;
+         }
+         if (c.fillCount > best.fillCount) continue;
+
+         const dp = c.pressure - best.pressure;
+         if (dp < -PRESSURE.tieThreshold) {
+           best = c;
+           continue;
+         }
+         if (Math.abs(dp) <= PRESSURE.tieThreshold) {
+           if (Math.random() < 0.5) best = c;
+         }
+       }
+
+       dropletLog(droplet.id, `seeking lower pressure => ${best.label}`);
+
+       const currentIndex = idxOf(currentX, currentY);
+
+       fill[currentIndex] -= 1;
+       fill[best.targetIndex] += 1;
+
+       droplet.x = best.targetX;
+       droplet.y = best.targetY;
+       droplet.momentumDirection = 0;
+       droplet.restingType = "none";
+       droplet.overflowed = false;
+       droplet.bottomSeen = false;
+       droplet.pressureAttempts = 0;
+
+       dropletLog(droplet.id, `moving upward => ${best.label}`);
+       return true;
+     }
+
+     /**
+      * Handles movement when a droplet is blocked by a max-filled cell below.
+      * Randomly chooses to slide left, slide right, or rest.
+      * Limited to PRESSURE_ATTEMPT_LIMIT attempts before giving up.
+      * @param {number} dropletIndex - Index of droplet to handle
+      * @param {number} maxFill - Maximum fill per cell
+      */
+     function handleMaxBelowPressure(dropletIndex, maxFill) {
+       const droplet = droplets[dropletIndex];
+
+       droplet.pressureAttempts += 1;
+       if (droplet.pressureAttempts >= PRESSURE_ATTEMPT_LIMIT) {
+         if (droplet.restingType !== "giveup") {
+           dropletLog(droplet.id, "pressure attempts reached 10; resting");
+         }
+         droplet.restingType = "giveup";
+         droplet.momentumDirection = 0;
+         return;
+       }
+
+       const choice = (Math.random() * 3) | 0; // 0=left, 1=right, 2=rest
+
+       if (choice === 2) {
+         dropletLog(droplet.id, "landed on max-fill below: choice => rest");
+         droplet.restingType = "maxbelow";
+         droplet.momentumDirection = 0;
+         droplet.pressureAttempts = 0;
+         return;
+       }
+
+       const firstDirection = (choice === 0) ? -1 : +1;
+       const secondDirection = -firstDirection;
+
+       dropletLog(droplet.id, `landed on max-fill below: choice => ${firstDirection === -1 ? "left" : "right"}`);
+
+       const movedFirst = trySlideDirection(dropletIndex, firstDirection, maxFill);
+       if (movedFirst) {
+         tryFallOne(dropletIndex, maxFill);
+         return;
+       }
+
+       const movedSecond = trySlideDirection(dropletIndex, secondDirection, maxFill);
+       if (movedSecond) {
+         tryFallOne(dropletIndex, maxFill);
+         return;
+       }
+
+       const movedUp = attemptUpwardTryThree(dropletIndex, maxFill);
+       if (movedUp) {
+         tryFallOne(dropletIndex, maxFill);
+         return;
+       }
+
+       const currentIndex = idxOf(droplet.x, droplet.y);
+       overMark[currentIndex] = 1;
+       droplet.overflowed = true;
+       droplet.restingType = "none";
+       droplet.momentumDirection = 0;
+       droplet.pressureAttempts = 0;
+       dropletLog(droplet.id, "entered overflow state");
+     }
+
+     //----------------------------------------------------------------------
+     //                        PHYSICS - LEVEL FINDING
+     //----------------------------------------------------------------------
+
+     /**
+      * Builds a 2D array mapping cell indices to arrays of droplet indices.
+      * Used for efficient horizontal level-finding operations.
+      * @returns {Array<Array<number>>} Array of droplet index arrays per cell
+      */
+     function buildCellBuckets() {
+       const buckets = Array.from({ length: cols * rows }, () => []);
+       for (let dropletIndex = 0; dropletIndex < droplets.length; dropletIndex++) {
+         const droplet = droplets[dropletIndex];
+         if (!inBounds(droplet.x, droplet.y)) continue;
+         buckets[idxOf(droplet.x, droplet.y)].push(dropletIndex);
+       }
+       return buckets;
+     }
+
+     /**
+      * Moves a single droplet between cells during level-finding phase
+      * @param {Object} params - Movement parameters
+      * @param {number} params.fromCellIndex - Source cell index
+      * @param {number} params.toCellIndex - Destination cell index
+      * @param {number} params.toX - Destination X coordinate
+      * @param {number} params.toY - Destination Y coordinate
+      * @param {Array<Array<number>>} params.buckets - Cell buckets array
+      * @returns {Droplet|false} The moved droplet or false if no droplet to move
+      */
+     function moveOneDropletBetweenCells({
+       fromCellIndex,
+       toCellIndex,
+       toX,
+       toY,
+       buckets
+     }) {
+       const fromBucket = buckets[fromCellIndex];
+       if (fromBucket.length === 0) return false;
+
+       const pickPos = (Math.random() * fromBucket.length) | 0;
+       const pickedDropletIndex = fromBucket[pickPos];
+
+       fromBucket[pickPos] = fromBucket[fromBucket.length - 1];
+       fromBucket.pop();
+
+       const droplet = droplets[pickedDropletIndex];
+
+       fill[fromCellIndex] -= 1;
+       fill[toCellIndex] += 1;
+
+       droplet.x = toX;
+       droplet.y = toY;
+
+       droplet.momentumDirection = 0;
+       droplet.restingType = "none";
+       droplet.overflowed = false;
+       droplet.pressureAttempts = 0;
+
+       buckets[toCellIndex].push(pickedDropletIndex);
+
+       return droplet;
+     }
+
+     /**
+      * Performs one pass of horizontal level-finding.
+      * Moves water between adjacent cells to reduce height differences.
+      * @param {Object} params - Level-finding parameters
+      * @param {number} params.maxFill - Maximum fill per cell
+      * @param {Array<Array<number>>} params.buckets - Cell buckets array
+      * @returns {boolean} True if any droplet moved
+      */
+     function levelFindingHorizontallyOnePass({ maxFill, buckets }) {
+       let movedAny = false;
+
+       for (let y = 0; y < rows; y++) {
+         const startX = levelingScanLeftToRight ? 0 : cols - 2;
+         const endX   = levelingScanLeftToRight ? cols - 1 : -1;
+         const step   = levelingScanLeftToRight ? 1 : -1;
+
+         for (let x = startX; x !== endX; x += step) {
+           const leftCellIndex = idxOf(x, y);
+           const rightCellIndex = idxOf(x + 1, y);
+
+           if (solids[leftCellIndex] === 1 || solids[rightCellIndex] === 1) continue;
+
+           const leftFillCount = fill[leftCellIndex];
+           const rightFillCount = fill[rightCellIndex];
+
+           const diff = leftFillCount - rightFillCount;
+
+           if (diff >= LEVELING.minDifferenceToMove && rightFillCount < maxFill) {
+             const movedDroplet = moveOneDropletBetweenCells({
+               fromCellIndex: leftCellIndex,
+               toCellIndex: rightCellIndex,
+               toX: x + 1,
+               toY: y,
+               buckets
+             });
+             if (movedDroplet) {
+               dropletLog(movedDroplet.id, "level-finding: moving right");
+               movedAny = true;
+             }
+           } else if (diff <= -LEVELING.minDifferenceToMove && leftFillCount < maxFill) {
+             const movedDroplet = moveOneDropletBetweenCells({
+               fromCellIndex: rightCellIndex,
+               toCellIndex: leftCellIndex,
+               toX: x,
+               toY: y,
+               buckets
+             });
+             if (movedDroplet) {
+               dropletLog(movedDroplet.id, "level-finding: moving left");
+               movedAny = true;
+             }
+           }
+         }
+       }
+
+       levelingScanLeftToRight = !levelingScanLeftToRight;
+       return movedAny;
+     }
+
+     /**
+      * Performs horizontal level-finding phase to reduce vertical water towers.
+      * Runs multiple passes per tick to accelerate level finding.
+      * @param {number} maxFill - Maximum fill per cell
+      */
+     function levelingPhase(maxFill) {
+       const buckets = buildCellBuckets();
+
+       for (let pass = 0; pass < LEVELING.passesPerTick; pass++) {
+         const moved = levelFindingHorizontallyOnePass({ maxFill, buckets });
+         if (!moved) break;
+       }
+     }
+
+     //----------------------------------------------------------------------
+     //                         SIMULATION CORE
+     //----------------------------------------------------------------------
+
+     /**
+      * Main simulation tick function that updates all droplet positions
+      */
+     function tick() {
+       if (!playing) return;
+
+       const maxFill = getMaxFill();
+
+       // --- remove droplets at bottom edge ---
+       for (let dropletIndex = droplets.length - 1; dropletIndex >= 0; dropletIndex--) {
+         const droplet = droplets[dropletIndex];
+         if (droplet.y === rows - 1) {
+           if (droplet.bottomSeen) {
+             dropletLog(droplet.id, "fell out of the bottom; removed");
+             removeDropletAt(dropletIndex);
+           } else {
+             droplet.bottomSeen = true;
+           }
+         }
+       }
+
+       removeDropletsInSolidCells();
+       rebuildFill();
+
+       // --- process each droplet's movement ---
+       for (let dropletIndex = 0; dropletIndex < droplets.length; dropletIndex++) {
+         const droplet = droplets[dropletIndex];
+         if (droplet.overflowed) continue;
+         if (droplet.y === rows - 1) continue;
+
+         const currentIndex = idxOf(droplet.x, droplet.y);
+         if (solids[currentIndex] === 1) continue;
+
+         const belowY = droplet.y + 1;
+         const belowIndex = idxOf(droplet.x, belowY);
+
+         // --- check if resting condition still applies ---
+         if (droplet.restingType === "solid") {
+           if (solids[belowIndex] === 1) continue;
+           droplet.restingType = "none";
+         } else if (droplet.restingType === "maxbelow" || droplet.restingType === "giveup") {
+           if (solids[belowIndex] === 0 && fill[belowIndex] >= maxFill) continue;
+           droplet.restingType = "none";
+           droplet.pressureAttempts = 0;
+         }
+
+         // --- handle resting on solid ---
+         if (solids[belowIndex] === 1 && fill[currentIndex] <= maxFill) {
+           droplet.momentumDirection = 0;
+           droplet.pressureAttempts = 0;
+           if (droplet.restingType !== "solid") {
+             dropletLog(droplet.id, "nothing to do; resting");
+             droplet.restingType = "solid";
+           }
+           continue;
+         }
+
+         // --- try falling down ---
+         if (solids[belowIndex] === 0 && fill[belowIndex] < maxFill) {
+           dropletLog(droplet.id, "dropping down");
+
+           fill[currentIndex] -= 1;
+           fill[belowIndex] += 1;
+
+           droplet.y = belowY;
+           droplet.momentumDirection = 0;
+           droplet.restingType = "none";
+           droplet.pressureAttempts = 0;
+
+           if (droplet.y === rows - 1) droplet.bottomSeen = true;
+           continue;
+         }
+
+         // --- handle blocked by max-fill water ---
+         if (solids[belowIndex] === 0 && fill[belowIndex] >= maxFill) {
+           handleMaxBelowPressure(dropletIndex, maxFill);
+           continue;
+         }
+       }
+
+       levelingPhase(maxFill);
+
+       renderAll();
+       flushLogs();
+     }
+
+     //----------------------------------------------------------------------
+     //                         EVENT HANDLERS
+     //----------------------------------------------------------------------
+
+     // --- grid click handler ---
+     elViz.addEventListener("pointerdown", (e) => {
+       const cell = e.target.closest?.(".viz-cell");
+       if (!cell) return;
+
+       const x = Number(cell.dataset.x);
+       const y = Number(cell.dataset.y);
+       if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+       if (!inBounds(x, y)) return;
+
+       const cellIndex = idxOf(x, y);
+       if (solids[cellIndex] === 1) return;
+
+       const maxFill = getMaxFill();
+       if (fill[cellIndex] >= maxFill) return;
+
+       const newId = nextDropletId++;
+       droplets.push({
+         id: newId,
+         x,
+         y,
+         momentumDirection: 0,
+         bottomSeen: false,
+         restingType: "none",
+         overflowed: false,
+         pressureAttempts: 0
+       });
+
+       fill[cellIndex] += 1;
+
+       renderAll();
+       flushLogs();
+     });
+
+     // --- control input handlers ---
+     elCols.addEventListener("input", debounce(() => buildGrid(true), 120));
+     elRows.addEventListener("input", debounce(() => buildGrid(true), 120));
+
+     elMaxFill.addEventListener("change", () => {
+       elMaxFill.value = clampInt(elMaxFill.value, LIMITS.maxFillMin, LIMITS.maxFillMax);
+       clampDropletsToMaxFill(getMaxFill());
+       renderAll();
+       flushLogs();
+     });
+
+     elTPS.addEventListener("input", () => {
+       const v = elTPS.value;
+       if (v.includes(".")) elTPS.value = String(Math.trunc(Number(v) || DEFAULTS.ticksPerSecond));
+     });
+     elTPS.addEventListener("change", () => {
+       elTPS.value = clampInt(elTPS.value, LIMITS.tpsMin, LIMITS.tpsMax);
+       if (playing) startTimer();
+     });
+
+     playSwitch.addEventListener("change", () => setPlaying(playSwitch.checked));
+     btnReset.addEventListener("click", resetAll);
+
+     // --- window resize handling ---
+     const ro = new ResizeObserver(() => updateCellSize());
+     ro.observe(elArea);
+     window.addEventListener("resize", debounce(updateCellSize, 80), { passive: true });
+
+     //----------------------------------------------------------------------
+     //                          INITIALIZATION
+     //----------------------------------------------------------------------
+
+     resetAll();
+   })();
+ </script>
 </body>
 </html>
